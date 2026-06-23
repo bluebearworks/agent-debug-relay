@@ -1,0 +1,71 @@
+{
+  "name": "vscode-agent-debug",
+  "displayName": "agent debug",
+  "description": "Allow local agents to discover running VS Code windows and start workspace debug profiles.",
+  "version": "0.1.0",
+  "publisher": "tyler",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:agentDebug.showStatus",
+    "onCommand:agentDebug.copyRegistryPath"
+  ],
+  "main": "./out/extension.js",
+  "bin": {
+    "vscode-agent-debug": "./bin/vscode-agent-debug.js"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "agentDebug.showStatus",
+        "title": "agent debug: show status"
+      },
+      {
+        "command": "agentDebug.copyRegistryPath",
+        "title": "agent debug: copy registry path"
+      }
+    ],
+    "configuration": {
+      "title": "agent debug",
+      "properties": {
+        "agentDebug.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Start the local agent debug endpoint for this VS Code window."
+        },
+        "agentDebug.host": {
+          "type": "string",
+          "default": "127.0.0.1",
+          "description": "Host interface used by the local agent debug endpoint."
+        },
+        "agentDebug.registryDir": {
+          "type": "string",
+          "default": "",
+          "description": "Directory where running VS Code window records are published. Empty uses the system temp directory."
+        },
+        "agentDebug.notifyOnLaunch": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a VS Code notification when an agent starts a debug profile."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "compile": "tsc -p .",
+    "watch": "tsc -watch -p ."
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.30",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.8.3"
+  }
+}
+

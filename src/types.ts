@@ -13,6 +13,9 @@ export type ActiveEditorRecord = {
 
 export type InstanceRecord = {
   id: string;
+  extensionVersion: string;
+  protocolVersion: number;
+  capabilities: string[];
   pid: number;
   appName: string;
   appHost: string;
@@ -44,6 +47,7 @@ export type LaunchProfileRecord = {
   folderPath: string | undefined;
   type: string | undefined;
   request: string | undefined;
+  preLaunchTask: string | undefined;
+  postDebugTask: string | undefined;
   detail: unknown;
 };
-

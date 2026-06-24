@@ -1,10 +1,25 @@
 {
-  "name": "vscode-agent-debug",
-  "displayName": "agent debug",
+  "name": "agent-debug-relay",
+  "displayName": "Agent Debug Relay",
   "description": "Allow local agents to discover running VS Code windows and start workspace debug profiles.",
   "version": "0.1.0",
   "publisher": "tyler",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tylerdhebert/agent-debug-relay.git"
+  },
+  "homepage": "https://github.com/tylerdhebert/agent-debug-relay#readme",
+  "bugs": {
+    "url": "https://github.com/tylerdhebert/agent-debug-relay/issues"
+  },
+  "keywords": [
+    "vscode",
+    "debug",
+    "agents",
+    "debugger",
+    "automation"
+  ],
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -13,43 +28,43 @@
   ],
   "activationEvents": [
     "onStartupFinished",
-    "onCommand:agentDebug.showStatus",
-    "onCommand:agentDebug.copyRegistryPath"
+    "onCommand:agentDebugRelay.showStatus",
+    "onCommand:agentDebugRelay.copyRegistryPath"
   ],
   "main": "./out/extension.js",
   "bin": {
-    "vscode-agent-debug": "./bin/vscode-agent-debug.js"
+    "agent-debug-relay": "./bin/agent-debug-relay.js"
   },
   "contributes": {
     "commands": [
       {
-        "command": "agentDebug.showStatus",
-        "title": "agent debug: show status"
+        "command": "agentDebugRelay.showStatus",
+        "title": "Agent Debug Relay: Show Status"
       },
       {
-        "command": "agentDebug.copyRegistryPath",
-        "title": "agent debug: copy registry path"
+        "command": "agentDebugRelay.copyRegistryPath",
+        "title": "Agent Debug Relay: Copy Registry Path"
       }
     ],
     "configuration": {
-      "title": "agent debug",
+      "title": "Agent Debug Relay",
       "properties": {
-        "agentDebug.enabled": {
+        "agentDebugRelay.enabled": {
           "type": "boolean",
           "default": true,
           "description": "Start the local agent debug endpoint for this VS Code window."
         },
-        "agentDebug.host": {
+        "agentDebugRelay.host": {
           "type": "string",
           "default": "127.0.0.1",
           "description": "Host interface used by the local agent debug endpoint."
         },
-        "agentDebug.registryDir": {
+        "agentDebugRelay.registryDir": {
           "type": "string",
           "default": "",
           "description": "Directory where running VS Code window records are published. Empty uses the system temp directory."
         },
-        "agentDebug.notifyOnLaunch": {
+        "agentDebugRelay.notifyOnLaunch": {
           "type": "boolean",
           "default": true,
           "description": "Show a VS Code notification when an agent starts a debug profile."
@@ -68,4 +83,3 @@
     "typescript": "^5.8.3"
   }
 }
-

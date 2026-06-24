@@ -1,21 +1,40 @@
 import * as http from "http";
 import * as vscode from "vscode";
 import { getLaunchProfiles } from "./launchProfiles";
+import { CAPABILITIES, PROTOCOL_VERSION } from "./protocol";
 import { InstanceRecord } from "./types";
 
 type RecordProvider = () => InstanceRecord;
 type JsonObject = Record<string, unknown>;
+const DEFAULT_STOP_WAIT_MS = 15_000;
+const STOP_POLL_MS = 100;
 
 export class AgentDebugServer {
   private server: http.Server | undefined;
   private portValue: number | undefined;
+  private readonly sessions = new Map<string, vscode.DebugSession>();
+  private readonly disposables: vscode.Disposable[] = [];
 
   constructor(
     private readonly host: string,
     private readonly token: string,
     private readonly getRecord: RecordProvider,
     private readonly notifyOnLaunch: () => boolean
-  ) {}
+  ) {
+    const active = vscode.debug.activeDebugSession;
+    if (active) {
+      this.sessions.set(active.id, active);
+    }
+
+    this.disposables.push(
+      vscode.debug.onDidStartDebugSession((session) => {
+        this.sessions.set(session.id, session);
+      }),
+      vscode.debug.onDidTerminateDebugSession((session) => {
+        this.sessions.delete(session.id);
+      })
+    );
+  }
 
   get port(): number {
     if (this.portValue === undefined) {
@@ -55,6 +74,10 @@ export class AgentDebugServer {
     this.server = undefined;
     this.portValue = undefined;
 
+    while (this.disposables.length > 0) {
+      this.disposables.pop()?.dispose();
+    }
+
     if (!server) {
       return;
     }
@@ -71,6 +94,9 @@ export class AgentDebugServer {
       writeJson(response, 200, {
         ok: true,
         id: record.id,
+        extensionVersion: record.extensionVersion,
+        protocolVersion: PROTOCOL_VERSION,
+        capabilities: [...CAPABILITIES],
         pid: record.pid,
         updatedAt: record.updatedAt
       });
@@ -93,7 +119,8 @@ export class AgentDebugServer {
 
     if (url.pathname === "/debug-sessions" && method === "GET") {
       writeJson(response, 200, {
-        active: debugSessionRecord(vscode.debug.activeDebugSession)
+        active: debugSessionRecord(vscode.debug.activeDebugSession),
+        sessions: this.sessionRecords()
       });
       return;
     }
@@ -101,6 +128,20 @@ export class AgentDebugServer {
     if (url.pathname === "/debug-sessions" && method === "POST") {
       const body = await readJsonBody(request);
       const result = await this.startDebugging(body);
+      writeJson(response, 200, result);
+      return;
+    }
+
+    if (url.pathname === "/debug-sessions/stop" && method === "POST") {
+      const body = await readJsonBody(request);
+      const result = await this.stopDebugging(body);
+      writeJson(response, 200, result);
+      return;
+    }
+
+    if (url.pathname === "/debug-sessions/restart" && method === "POST") {
+      const body = await readJsonBody(request);
+      const result = await this.restartDebugging(body);
       writeJson(response, 200, result);
       return;
     }
@@ -134,7 +175,7 @@ export class AgentDebugServer {
     const started = await vscode.debug.startDebugging(folder, profileName, { noDebug });
 
     if (started && this.notifyOnLaunch()) {
-      void vscode.window.showInformationMessage(`agent debug started ${profileName}`);
+      void vscode.window.showInformationMessage(`Agent Debug Relay started ${profileName}`);
     }
 
     return {
@@ -143,6 +184,128 @@ export class AgentDebugServer {
       folderUri: folder?.uri.toString(),
       active: debugSessionRecord(vscode.debug.activeDebugSession)
     };
+  }
+
+  private async stopDebugging(body: JsonObject): Promise<JsonObject> {
+    const all = booleanBodyField(body, "all") ?? false;
+    const allowNoSession = booleanBodyField(body, "allowNoSession") ?? false;
+    const waitMs = numberBodyField(body, "waitMs") ?? DEFAULT_STOP_WAIT_MS;
+    const session = all ? undefined : this.findSession(body);
+    const targetSessions = all ? [...this.sessions.values()] : session ? [session] : [];
+    const stopped = targetSessions.map((targetSession) => debugSessionRecord(targetSession)).filter((targetSession) => targetSession !== undefined);
+    const stoppedIds = targetSessions.map((targetSession) => targetSession.id);
+
+    if (!all && !session) {
+      if (allowNoSession) {
+        return {
+          stopped: false,
+          terminated: true,
+          active: debugSessionRecord(vscode.debug.activeDebugSession),
+          sessions: this.sessionRecords()
+        };
+      }
+
+      throw Object.assign(new Error("debug session not found"), { statusCode: 404 });
+    }
+
+    await vscode.debug.stopDebugging(session);
+
+    const wait = await this.waitForSessionsToStop(stoppedIds, waitMs);
+
+    if (!wait.terminated) {
+      throw Object.assign(new Error(`debug session did not terminate within ${waitMs}ms`), {
+        statusCode: 504,
+        remainingSessions: wait.remaining
+      });
+    }
+
+    return {
+      stopped: true,
+      terminated: wait.terminated,
+      waitMs,
+      stoppedSessions: stopped,
+      active: debugSessionRecord(vscode.debug.activeDebugSession)
+    };
+  }
+
+  private async restartDebugging(body: JsonObject): Promise<JsonObject> {
+    const profileName = stringBodyField(body, "profileName") ?? stringBodyField(body, "name");
+
+    if (!profileName) {
+      throw Object.assign(new Error("profileName is required"), { statusCode: 400 });
+    }
+
+    const stopBody = {
+      ...body,
+      sessionName: stringBodyField(body, "sessionName") ?? stringBodyField(body, "session") ?? profileName,
+      allowNoSession: true
+    };
+    const stopped = await this.stopDebugging(stopBody);
+    const started = await this.startDebugging(body);
+
+    return {
+      stopped,
+      started
+    };
+  }
+
+  private sessionRecords(): JsonObject[] {
+    return [...this.sessions.values()].map((session) => debugSessionRecord(session)).filter((session) => session !== undefined);
+  }
+
+  private async waitForSessionsToStop(sessionIds: string[], waitMs: number): Promise<{ terminated: boolean; remaining: JsonObject[] }> {
+    if (sessionIds.length === 0 || waitMs <= 0) {
+      return {
+        terminated: sessionIds.every((sessionId) => !this.sessions.has(sessionId)),
+        remaining: this.recordsForSessionIds(sessionIds)
+      };
+    }
+
+    const deadline = Date.now() + waitMs;
+
+    while (Date.now() < deadline) {
+      if (sessionIds.every((sessionId) => !this.sessions.has(sessionId))) {
+        return {
+          terminated: true,
+          remaining: []
+        };
+      }
+
+      await sleep(STOP_POLL_MS);
+    }
+
+    return {
+      terminated: sessionIds.every((sessionId) => !this.sessions.has(sessionId)),
+      remaining: this.recordsForSessionIds(sessionIds)
+    };
+  }
+
+  private recordsForSessionIds(sessionIds: string[]): JsonObject[] {
+    return sessionIds
+      .map((sessionId) => this.sessions.get(sessionId))
+      .filter((session) => session !== undefined)
+      .map((session) => debugSessionRecord(session))
+      .filter((session) => session !== undefined);
+  }
+
+  private findSession(body: JsonObject): vscode.DebugSession | undefined {
+    const sessionId = stringBodyField(body, "sessionId");
+    const sessionSelector = stringBodyField(body, "session");
+    const sessionName = stringBodyField(body, "sessionName");
+
+    if (sessionId) {
+      return this.sessions.get(sessionId);
+    }
+
+    if (sessionSelector) {
+      return this.sessions.get(sessionSelector) ?? [...this.sessions.values()].find((session) => session.name === sessionSelector);
+    }
+
+    if (sessionName) {
+      return [...this.sessions.values()].find((session) => session.name === sessionName);
+    }
+
+    return vscode.debug.activeDebugSession;
   }
 }
 
@@ -222,3 +385,11 @@ function booleanBodyField(body: JsonObject, key: string): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
+function numberBodyField(body: JsonObject, key: string): number | undefined {
+  const value = body[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}

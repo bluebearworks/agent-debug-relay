@@ -5,12 +5,16 @@ type LaunchConfiguration = {
   name?: unknown;
   type?: unknown;
   request?: unknown;
+  preLaunchTask?: unknown;
+  postDebugTask?: unknown;
   [key: string]: unknown;
 };
 
 type LaunchCompound = {
   name?: unknown;
   configurations?: unknown;
+  preLaunchTask?: unknown;
+  postDebugTask?: unknown;
   [key: string]: unknown;
 };
 
@@ -44,6 +48,8 @@ function getProfilesForScope(folder: vscode.WorkspaceFolder | undefined): Launch
       folderPath,
       type: stringField(configuration.type),
       request: stringField(configuration.request),
+      preLaunchTask: stringField(configuration.preLaunchTask),
+      postDebugTask: stringField(configuration.postDebugTask),
       detail: cloneJson(configuration)
     }));
 
@@ -57,6 +63,8 @@ function getProfilesForScope(folder: vscode.WorkspaceFolder | undefined): Launch
       folderPath,
       type: undefined,
       request: undefined,
+      preLaunchTask: stringField(compound.preLaunchTask),
+      postDebugTask: stringField(compound.postDebugTask),
       detail: cloneJson(compound)
     }));
 
@@ -70,4 +78,3 @@ function stringField(value: unknown): string | undefined {
 function cloneJson(value: unknown): unknown {
   return JSON.parse(JSON.stringify(value));
 }
-

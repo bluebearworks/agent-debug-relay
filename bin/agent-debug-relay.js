@@ -6,7 +6,16 @@ const http = require("http");
 const os = require("os");
 const path = require("path");
 
-const DEFAULT_REGISTRY_DIR = path.join(os.tmpdir(), "vscode-agent-debug", "instances");
+const DEFAULT_REGISTRY_DIR = path.join(os.tmpdir(), "agent-debug-relay", "instances");
+const LEGACY_REGISTRY_DIR = path.join(os.tmpdir(), "vscode-agent-debug", "instances");
+const REQUIRED_PROTOCOL_VERSION = 2;
+
+const COMMAND_CAPABILITIES = {
+  profiles: ["profileLifecycleFields"],
+  sessions: ["sessions"],
+  stop: ["stop", "stopPolling"],
+  restart: ["restart", "stopPolling"]
+};
 
 main().catch((error) => {
   console.error(error.message || String(error));
@@ -21,8 +30,8 @@ async function main() {
     return;
   }
 
-  const registryDir = options.registryDir || process.env.VSCODE_AGENT_DEBUG_REGISTRY_DIR || DEFAULT_REGISTRY_DIR;
-  const instances = discoverInstances(registryDir).filter((instance) => instance.live);
+  const registryDirs = registryDirectories(options);
+  const instances = registryDirs.flatMap((registryDir) => discoverInstances(registryDir)).filter((instance) => instance.live);
 
   if (command === "instances") {
     output(options, instances.map((entry) => entry.record));
@@ -30,6 +39,7 @@ async function main() {
   }
 
   const selected = selectInstance(instances, options);
+  ensureCompatible(selected.record, COMMAND_CAPABILITIES[command] || []);
 
   if (command === "status") {
     const status = await requestJson(selected.record, "GET", "/health");
@@ -40,6 +50,12 @@ async function main() {
   if (command === "profiles") {
     const profiles = await requestJson(selected.record, "GET", "/launch-profiles");
     output(options, profiles);
+    return;
+  }
+
+  if (command === "sessions") {
+    const sessions = await requestJson(selected.record, "GET", "/debug-sessions");
+    output(options, sessions);
     return;
   }
 
@@ -62,6 +78,44 @@ async function main() {
     return;
   }
 
+  if (command === "stop") {
+    const session = positional.join(" ").trim() || options.session || options.sessionName || options.sessionId;
+    const result = await requestJson(selected.record, "POST", "/debug-sessions/stop", {
+      all: options.all ? true : undefined,
+      session: session || undefined,
+      sessionId: options.sessionId,
+      sessionName: options.sessionName,
+      waitMs: numberOption(options.waitMs, "wait-ms")
+    });
+
+    output(options, result);
+    return;
+  }
+
+  if (command === "restart") {
+    const profileName = positional.join(" ").trim() || options.name || options.profileName;
+
+    if (!profileName) {
+      throw new Error("profile name is required");
+    }
+
+    const profiles = await requestJson(selected.record, "GET", "/launch-profiles");
+    const profile = chooseProfile(profiles.profiles || [], profileName, options);
+    const result = await requestJson(selected.record, "POST", "/debug-sessions/restart", {
+      profileName: profile.name,
+      folderUri: profile.folderUri,
+      noDebug: options.noDebug ? true : undefined,
+      all: options.all ? true : undefined,
+      session: options.session,
+      sessionId: options.sessionId,
+      sessionName: options.sessionName,
+      waitMs: numberOption(options.waitMs, "wait-ms")
+    });
+
+    output(options, result);
+    return;
+  }
+
   throw new Error(`unknown command: ${command}`);
 }
 
@@ -78,7 +132,7 @@ function parseArgs(args) {
       const normalized = key.replace(/-([a-z])/g, (_, char) => char.toUpperCase());
       const next = args[index + 1];
 
-      if (["json", "help", "no-debug"].includes(key)) {
+      if (["json", "help", "no-debug", "all"].includes(key)) {
         options[normalized] = true;
       } else {
         if (!next) {
@@ -139,7 +193,7 @@ function isLiveProcess(pid) {
 
 function selectInstance(instances, options) {
   if (instances.length === 0) {
-    throw new Error("no running VS Code instances with agent debug were found");
+    throw new Error("no running VS Code instances with Agent Debug Relay were found");
   }
 
   if (options.instance) {
@@ -172,6 +226,24 @@ function selectInstance(instances, options) {
   }).join("\n");
 
   throw new Error(`multiple VS Code instances are running; pass --workspace or --instance\n${candidates}`);
+}
+
+function ensureCompatible(record, requiredCapabilities) {
+  if (requiredCapabilities.length === 0) {
+    return;
+  }
+
+  const protocolVersion = Number.isInteger(record.protocolVersion) ? record.protocolVersion : 1;
+  const capabilities = Array.isArray(record.capabilities) ? record.capabilities : [];
+
+  if (protocolVersion < REQUIRED_PROTOCOL_VERSION) {
+    throw new Error(`VS Code window ${record.id} is running Agent Debug Relay protocol ${protocolVersion}; reload that VS Code window so it picks up protocol ${REQUIRED_PROTOCOL_VERSION}.`);
+  }
+
+  const missing = requiredCapabilities.filter((capability) => !capabilities.includes(capability));
+  if (missing.length > 0) {
+    throw new Error(`VS Code window ${record.id} is missing capabilities: ${missing.join(", ")}. Reload the window or reinstall the extension.`);
+  }
 }
 
 function instanceScore(record, workspace) {
@@ -304,29 +376,72 @@ function output(options, value) {
     return;
   }
 
+  if (value && Array.isArray(value.sessions)) {
+    printSessions(value);
+    return;
+  }
+
   console.log(JSON.stringify(value, null, 2));
 }
 
 function printInstance(record) {
   const folders = (record.workspaceFolders || []).map((folder) => folder.path).join(", ");
-  console.log(`${record.id}\t${record.host}:${record.port}\t${record.focused ? "focused" : "background"}\t${folders || record.workspaceFile || "(empty workspace)"}`);
+  const protocol = record.protocolVersion ? `protocol ${record.protocolVersion}` : "protocol 1";
+  const version = record.extensionVersion ? `extension ${record.extensionVersion}` : "extension unknown";
+  console.log(`${record.id}\t${record.host}:${record.port}\t${record.focused ? "focused" : "background"}\t${protocol}\t${version}\t${folders || record.workspaceFile || "(empty workspace)"}`);
+}
+
+function printSessions(value) {
+  const activeId = value.active?.id;
+  for (const session of value.sessions) {
+    console.log(`${session.id}\t${session.id === activeId ? "active" : "background"}\t${session.name}\t${session.type}\t${session.workspaceFolder || "workspace"}`);
+  }
 }
 
 function printHelp() {
-  console.log(`vscode-agent-debug
+  console.log(`agent-debug-relay
 
 Usage:
-  vscode-agent-debug instances [--workspace <path>] [--json]
-  vscode-agent-debug profiles [--workspace <path>] [--instance <id>] [--json]
-  vscode-agent-debug start <profile name> [--workspace <path>] [--folder <folder>] [--instance <id>] [--no-debug] [--json]
-  vscode-agent-debug status [--workspace <path>] [--instance <id>] [--json]
+  agent-debug-relay instances [--workspace <path>] [--json]
+  agent-debug-relay profiles [--workspace <path>] [--instance <id>] [--json]
+  agent-debug-relay sessions [--workspace <path>] [--instance <id>] [--json]
+  agent-debug-relay start <profile name> [--workspace <path>] [--folder <folder>] [--instance <id>] [--no-debug] [--json]
+  agent-debug-relay stop [session id or name] [--workspace <path>] [--instance <id>] [--all] [--wait-ms <ms>] [--json]
+  agent-debug-relay restart <profile name> [--workspace <path>] [--folder <folder>] [--instance <id>] [--session <id or name>] [--all] [--wait-ms <ms>] [--no-debug] [--json]
+  agent-debug-relay status [--workspace <path>] [--instance <id>] [--json]
 
 Options:
   --workspace <path>      Select the VS Code window whose workspace contains this path.
   --instance <id>         Select a specific registered VS Code window.
   --folder <folder>       Disambiguate duplicate profile names in multi-root workspaces.
+  --session <id or name>   Select a debug session to stop before restart.
+  --all                   Stop all debug sessions in the selected VS Code window.
+  --wait-ms <ms>           Wait this long for stopped sessions to terminate. Defaults to 15000.
+  --no-debug              Start without attaching a debugger.
   --registry-dir <path>   Read instance records from a custom registry directory.
   --json                  Print machine-readable JSON.
 `);
 }
 
+function registryDirectories(options) {
+  const configured = options.registryDir || process.env.AGENT_DEBUG_RELAY_REGISTRY_DIR || process.env.VSCODE_AGENT_DEBUG_REGISTRY_DIR;
+
+  if (configured) {
+    return [configured];
+  }
+
+  return [DEFAULT_REGISTRY_DIR, LEGACY_REGISTRY_DIR];
+}
+
+function numberOption(value, label) {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`--${label} must be a non-negative number`);
+  }
+
+  return parsed;
+}

@@ -3,4 +3,4 @@ out/
 *.vsix
 .vscode-test/
 .playwright-mcp/
-
+artifacts/

@@ -1,26 +1,52 @@
-# Agent Debug Skill
+# Agent Debug Relay Skill
 
 Use this skill when an agent needs VS Code to start a debug session in an already-running VS Code window.
 
 ## Workflow
 
-1. Build or install the `vscode-agent-debug` extension, then make sure the target VS Code window has the extension activated.
-2. Discover running windows:
+1. Build or install the `agent-debug-relay` extension, then make sure the target VS Code window has the extension activated.
+2. Make sure the `agent-debug-relay` CLI is available on `PATH`. During local development, run `npm link` from the extension repo. For distributed use, install the package globally or provide an equivalent command shim.
+3. Discover running windows:
 
 ```powershell
-node C:\Users\Tyler\documents\projects\vscode-agent-debug\bin\vscode-agent-debug.js instances --workspace <repo-path> --json
+agent-debug-relay instances --workspace <repo-path> --json
 ```
 
-3. List launch profiles from the selected window:
+Use windows with `protocolVersion` 2 or newer. If a command reports that a VS Code window is running an older protocol, reload that VS Code window so the installed extension code is active there.
+
+4. List launch profiles from the selected window:
 
 ```powershell
-node C:\Users\Tyler\documents\projects\vscode-agent-debug\bin\vscode-agent-debug.js profiles --workspace <repo-path> --json
+agent-debug-relay profiles --workspace <repo-path> --json
 ```
 
-4. Start the chosen profile by exact name:
+Read `preLaunchTask` and `postDebugTask` from the returned profiles. When `preLaunchTask` is present, `start` will let VS Code run that task as part of the normal debug launch flow.
+
+5. Start the chosen profile by exact name:
 
 ```powershell
-node C:\Users\Tyler\documents\projects\vscode-agent-debug\bin\vscode-agent-debug.js start "<profile name>" --workspace <repo-path> --json
+agent-debug-relay start "<profile name>" --workspace <repo-path> --json
+```
+
+6. List running debug sessions when lifecycle control is needed:
+
+```powershell
+agent-debug-relay sessions --workspace <repo-path> --json
+```
+
+7. Stop the active or selected debug session before rebuilding:
+
+```powershell
+agent-debug-relay stop --workspace <repo-path> --json
+agent-debug-relay stop "<session id or name>" --workspace <repo-path> --json
+```
+
+`stop` waits for the selected debug session to terminate. Use `--wait-ms <milliseconds>` to override the default wait.
+
+8. Restart a profile when no rebuild step is needed between stop and start:
+
+```powershell
+agent-debug-relay restart "<profile name>" --workspace <repo-path> --json
 ```
 
 For duplicate profile names in a multi-root workspace, add `--folder <workspace-folder-path-or-name>`.
@@ -37,13 +63,25 @@ Start existing named launch profiles whenever possible. Named profile launches u
 
 Use the profile names returned by `profiles`; preserve spelling, spacing, and folder identity.
 
+For compiled services that need a rebuild, use this loop:
+
+```powershell
+agent-debug-relay stop "<session id or name>" --workspace <repo-path> --json
+agent-debug-relay start "<profile name>" --workspace <repo-path> --json
+```
+
+Prefer putting the build in the launch profile's `preLaunchTask`, so the `start` command follows the same path as a manual VS Code launch. Use explicit build commands between `stop` and `start` only when the project intentionally keeps that work outside the launch profile.
+
+Use `restart` for stop-and-start only. It still lets VS Code run the profile's `preLaunchTask` during the new launch.
+
+Use `--all` only when every debug session in the selected VS Code window should stop.
+
 ## Troubleshooting
 
 Run:
 
 ```powershell
-node C:\Users\Tyler\documents\projects\vscode-agent-debug\bin\vscode-agent-debug.js status --workspace <repo-path> --json
+agent-debug-relay status --workspace <repo-path> --json
 ```
 
-The default registry folder is `%TEMP%\vscode-agent-debug\instances`. Set `VSCODE_AGENT_DEBUG_REGISTRY_DIR` or the VS Code setting `agentDebug.registryDir` when a custom location is useful.
-
+The default registry folder is `%TEMP%\agent-debug-relay\instances`. Set `AGENT_DEBUG_RELAY_REGISTRY_DIR` or the VS Code setting `agentDebugRelay.registryDir` when a custom location is useful.

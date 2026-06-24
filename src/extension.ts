@@ -3,10 +3,14 @@ import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
+import { CAPABILITIES, PROTOCOL_VERSION } from "./protocol";
 import { AgentDebugServer } from "./server";
 import { ActiveEditorRecord, InstanceRecord, WorkspaceFolderRecord } from "./types";
 
 const HEARTBEAT_MS = 5_000;
+const CONFIG_SECTION = "agentDebugRelay";
+const EXTENSION_ID = "tyler.agent-debug-relay";
+const REGISTRY_NAMESPACE = "agent-debug-relay";
 
 let server: AgentDebugServer | undefined;
 let record: InstanceRecord | undefined;
@@ -14,7 +18,7 @@ let registryPath: string | undefined;
 let heartbeat: NodeJS.Timeout | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-  const config = vscode.workspace.getConfiguration("agentDebug");
+  const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
 
   if (!config.get<boolean>("enabled", true)) {
     return;
@@ -30,7 +34,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     return record;
-  }, () => vscode.workspace.getConfiguration("agentDebug").get<boolean>("notifyOnLaunch", true));
+  }, () => vscode.workspace.getConfiguration(CONFIG_SECTION).get<boolean>("notifyOnLaunch", true));
 
   await server.start();
 
@@ -45,8 +49,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerRefreshTriggers(context);
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("agentDebug.showStatus", () => showStatus()),
-    vscode.commands.registerCommand("agentDebug.copyRegistryPath", async () => copyRegistryPath()),
+    vscode.commands.registerCommand("agentDebugRelay.showStatus", () => showStatus()),
+    vscode.commands.registerCommand("agentDebugRelay.copyRegistryPath", async () => copyRegistryPath()),
     new vscode.Disposable(() => {
       if (heartbeat) {
         clearInterval(heartbeat);
@@ -83,7 +87,7 @@ function registerRefreshTriggers(context: vscode.ExtensionContext): void {
     vscode.window.onDidChangeWindowState(refresh),
     vscode.debug.onDidChangeActiveDebugSession(refresh),
     vscode.workspace.onDidChangeConfiguration((event) => {
-      if (event.affectsConfiguration("launch") || event.affectsConfiguration("agentDebug")) {
+      if (event.affectsConfiguration("launch") || event.affectsConfiguration(CONFIG_SECTION)) {
         refresh();
       }
     })
@@ -112,6 +116,9 @@ function buildRecord(
 ): InstanceRecord {
   return {
     id,
+    extensionVersion: extensionVersion(),
+    protocolVersion: PROTOCOL_VERSION,
+    capabilities: [...CAPABILITIES],
     pid: process.pid,
     appName: vscode.env.appName,
     appHost: vscode.env.appHost,
@@ -130,6 +137,11 @@ function buildRecord(
     createdAt,
     updatedAt: new Date().toISOString()
   };
+}
+
+function extensionVersion(): string {
+  const manifest = vscode.extensions.getExtension(EXTENSION_ID)?.packageJSON as { version?: unknown } | undefined;
+  return typeof manifest?.version === "string" ? manifest.version : "0.0.0";
 }
 
 function workspaceFolderRecords(): WorkspaceFolderRecord[] {
@@ -170,47 +182,46 @@ function activeDebugSessionRecord(): InstanceRecord["activeDebugSession"] {
 }
 
 async function getOrCreateToken(context: vscode.ExtensionContext): Promise<string> {
-  const existing = context.globalState.get<string>("agentDebug.token");
+  const existing = context.globalState.get<string>("agentDebugRelay.token");
 
   if (existing) {
     return existing;
   }
 
   const token = crypto.randomBytes(32).toString("hex");
-  await context.globalState.update("agentDebug.token", token);
+  await context.globalState.update("agentDebugRelay.token", token);
   return token;
 }
 
 function getRegistryDir(): string {
-  const configured = vscode.workspace.getConfiguration("agentDebug").get<string>("registryDir", "");
+  const configured = vscode.workspace.getConfiguration(CONFIG_SECTION).get<string>("registryDir", "");
 
   if (configured.trim().length > 0) {
     return path.resolve(configured);
   }
 
-  return path.join(os.tmpdir(), "vscode-agent-debug", "instances");
+  return path.join(os.tmpdir(), REGISTRY_NAMESPACE, "instances");
 }
 
 async function showStatus(): Promise<void> {
   await publishRecord();
 
   if (!record) {
-    void vscode.window.showInformationMessage("agent debug is inactive");
+    void vscode.window.showInformationMessage("Agent Debug Relay is inactive");
     return;
   }
 
-  void vscode.window.showInformationMessage(`agent debug listening on ${record.host}:${record.port}`);
+  void vscode.window.showInformationMessage(`Agent Debug Relay listening on ${record.host}:${record.port}`);
 }
 
 async function copyRegistryPath(): Promise<void> {
   await publishRecord();
 
   if (!registryPath) {
-    void vscode.window.showInformationMessage("agent debug registry path is unavailable");
+    void vscode.window.showInformationMessage("Agent Debug Relay registry path is unavailable");
     return;
   }
 
   await vscode.env.clipboard.writeText(registryPath);
-  void vscode.window.showInformationMessage("agent debug registry path copied");
+  void vscode.window.showInformationMessage("Agent Debug Relay registry path copied");
 }
-

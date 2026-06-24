@@ -2,7 +2,7 @@
   "name": "agent-debug-relay",
   "displayName": "Agent Debug Relay",
   "description": "Allow local agents to discover running VS Code windows and start workspace debug profiles.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "bluebearworks",
   "license": "MIT",
   "repository": {

@@ -112,7 +112,7 @@ export class AgentDebugServer {
 
     if (url.pathname === "/launch-profiles" && method === "GET") {
       writeJson(response, 200, {
-        profiles: getLaunchProfiles()
+        profiles: await getLaunchProfiles()
       });
       return;
     }
@@ -172,7 +172,9 @@ export class AgentDebugServer {
     }
 
     const folder = findWorkspaceFolder(folderUri);
-    const started = await vscode.debug.startDebugging(folder, profileName, { noDebug });
+    const profile = objectBodyField(body, "profile");
+    const configuration = dotnetLaunchSettingsConfiguration(profile);
+    const started = await vscode.debug.startDebugging(folder, configuration ?? profileName, { noDebug });
 
     if (started && this.notifyOnLaunch()) {
       void vscode.window.showInformationMessage(`Agent Debug Relay started ${profileName}`);
@@ -181,7 +183,11 @@ export class AgentDebugServer {
     return {
       started,
       profileName,
+      kind: stringField(profile?.kind),
       folderUri: folder?.uri.toString(),
+      projectPath: stringField(profile?.projectPath),
+      launchSettingsPath: stringField(profile?.launchSettingsPath),
+      launchSettingsProfile: stringField(profile?.launchSettingsProfile),
       active: debugSessionRecord(vscode.debug.activeDebugSession)
     };
   }
@@ -378,6 +384,39 @@ function statusForError(error: unknown): number {
 function stringBodyField(body: JsonObject, key: string): string | undefined {
   const value = body[key];
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function stringField(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function objectBodyField(body: JsonObject, key: string): JsonObject | undefined {
+  const value = body[key];
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as JsonObject : undefined;
+}
+
+function dotnetLaunchSettingsConfiguration(profile: JsonObject | undefined): vscode.DebugConfiguration | undefined {
+  if (!profile || profile.kind !== "dotnetLaunchSettings") {
+    return undefined;
+  }
+
+  const name = stringField(profile.name);
+  const projectPath = stringField(profile.projectPath);
+  const launchSettingsProfile = stringField(profile.launchSettingsProfile) ?? name;
+  const launchSettingsFilePath = stringField(profile.launchSettingsPath);
+
+  if (!name || !projectPath || !launchSettingsProfile) {
+    return undefined;
+  }
+
+  return {
+    name,
+    type: "dotnet",
+    request: "launch",
+    projectPath,
+    launchSettingsProfile,
+    launchSettingsFilePath
+  };
 }
 
 function booleanBodyField(body: JsonObject, key: string): boolean | undefined {

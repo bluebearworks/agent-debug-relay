@@ -82,7 +82,7 @@ npm run package:extension
 Install the packaged VSIX:
 
 ```powershell
-code --install-extension .\packages\extension\agent-debug-relay-0.1.3.vsix --force
+code --install-extension .\packages\extension\agent-debug-relay-0.1.4.vsix --force
 ```
 
 ## Protocol
@@ -114,6 +114,6 @@ Set `AGENT_DEBUG_RELAY_REGISTRY_DIR` for the CLI or `agentDebugRelay.registryDir
 
 ## Debug Lifecycle
 
-Profile discovery surfaces `preLaunchTask` and `postDebugTask` as top-level fields alongside the full launch profile detail. For compiled services, put builds in `preLaunchTask` when possible so an agent `start` follows the same path as a manual VS Code launch.
+Profile discovery surfaces VS Code `launch.json` configurations, compounds, and .NET profiles from `<project>/Properties/launchSettings.json`. `preLaunchTask` and `postDebugTask` are returned as top-level fields alongside the full launch profile detail when they are present. For compiled services, put builds in `preLaunchTask` when possible so an agent `start` follows the same path as a manual VS Code launch.
 
 For services that need a restart, agents can stop the active or selected debug session, wait for termination, then start the same profile again. `restart` is available for direct stop-and-start flows. `stop` and `restart` accept `--wait-ms <milliseconds>`; the default wait is 15000ms.

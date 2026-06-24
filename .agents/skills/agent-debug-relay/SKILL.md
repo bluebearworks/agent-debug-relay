@@ -36,7 +36,7 @@ Use windows with `protocolVersion` 2 or newer. If a command reports that a VS Co
 agent-debug-relay profiles --workspace <repo-path> --json
 ```
 
-Read `preLaunchTask` and `postDebugTask` from the returned profiles. When `preLaunchTask` is present, `start` lets VS Code run that task as part of the normal debug launch flow.
+Read `preLaunchTask` and `postDebugTask` from the returned profiles. Profile discovery includes VS Code `launch.json` configurations, compounds, and .NET profiles from `<project>/Properties/launchSettings.json`. When `preLaunchTask` is present, `start` lets VS Code run that task as part of the normal debug launch flow.
 
 5. Start the chosen profile by exact name:
 

@@ -40,11 +40,15 @@ export type InstanceRecord = {
 };
 
 export type LaunchProfileRecord = {
-  kind: "configuration" | "compound";
+  kind: "configuration" | "compound" | "dotnetLaunchSettings";
   name: string;
   folderName: string | undefined;
   folderUri: string | undefined;
   folderPath: string | undefined;
+  projectName?: string;
+  projectPath?: string;
+  launchSettingsPath?: string;
+  launchSettingsProfile?: string;
   type: string | undefined;
   request: string | undefined;
   preLaunchTask: string | undefined;

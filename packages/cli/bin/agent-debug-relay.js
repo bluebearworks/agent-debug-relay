@@ -71,6 +71,7 @@ async function main() {
     const result = await requestJson(selected.record, "POST", "/debug-sessions", {
       profileName: profile.name,
       folderUri: profile.folderUri,
+      profile,
       noDebug: options.noDebug ? true : undefined
     });
 
@@ -104,6 +105,7 @@ async function main() {
     const result = await requestJson(selected.record, "POST", "/debug-sessions/restart", {
       profileName: profile.name,
       folderUri: profile.folderUri,
+      profile,
       noDebug: options.noDebug ? true : undefined,
       all: options.all ? true : undefined,
       session: options.session,
@@ -279,9 +281,12 @@ function chooseProfile(profiles, profileName, options) {
   if (options.folder) {
     const folderNeedle = normalizeLoose(options.folder);
     matches = matches.filter((profile) => {
-      return [profile.folderUri, profile.folderPath, profile.folderName]
+      return [profile.folderUri, profile.folderPath, profile.folderName, profile.projectPath, profile.projectName, profile.launchSettingsPath]
         .filter(Boolean)
-        .some((value) => normalizeLoose(value) === folderNeedle);
+        .some((value) => {
+          const normalized = normalizeLoose(value);
+          return normalized === folderNeedle || normalized.endsWith(`/${folderNeedle}`) || normalized.startsWith(`${folderNeedle}/`);
+        });
     });
   }
 
@@ -294,7 +299,8 @@ function chooseProfile(profiles, profileName, options) {
   }
 
   const candidates = matches.map((profile) => {
-    return `- ${profile.name} (${profile.folderName || "workspace"}: ${profile.folderPath || profile.folderUri || "no folder"})`;
+    const project = profile.projectName || profile.projectPath ? `, project: ${profile.projectName || profile.projectPath}` : "";
+    return `- ${profile.name} (${profile.folderName || "workspace"}: ${profile.folderPath || profile.folderUri || "no folder"}${project})`;
   }).join("\n");
 
   throw new Error(`multiple launch profiles named ${profileName}; pass --folder\n${candidates}`);

@@ -14,6 +14,6 @@ Install the agent skill for Codex, Claude Code, or opencode:
 npx skills add bluebearworks/agent-debug-relay -g -a codex claude-code opencode -s agent-debug-relay -y --copy --full-depth
 ```
 
-The extension publishes an authenticated localhost endpoint for each VS Code window. The CLI reads the local registry, selects the right running window, and sends debug lifecycle requests to that extension instance.
+The extension publishes an authenticated localhost endpoint for each VS Code window. The CLI reads the local registry, selects the right running window, and sends debug lifecycle requests to that extension instance. Profile discovery includes VS Code `launch.json` configurations, compounds, and .NET profiles from `<project>/Properties/launchSettings.json`.
 
 Reload already-open VS Code windows after installing or upgrading the extension.

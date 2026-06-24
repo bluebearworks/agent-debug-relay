@@ -5,7 +5,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/bluebearworks/agent-debug-relay.git",
+    "url": "git+https://github.com/bluebearworks/agent-debug-relay.git",
     "directory": "packages/cli"
   },
   "homepage": "https://github.com/bluebearworks/agent-debug-relay/tree/main/packages/cli#readme",
@@ -21,7 +21,7 @@
     "cli"
   ],
   "bin": {
-    "agent-debug-relay": "./bin/agent-debug-relay.js"
+    "agent-debug-relay": "bin/agent-debug-relay.js"
   },
   "files": [
     "bin",

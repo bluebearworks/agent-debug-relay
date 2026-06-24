@@ -8,6 +8,12 @@ Install:
 npm install -g @bluebearworks/agent-debug-relay
 ```
 
+Install the agent skill:
+
+```powershell
+npx skills add bluebearworks/agent-debug-relay -g -a codex claude-code opencode -s agent-debug-relay -y --copy --full-depth
+```
+
 Use:
 
 ```powershell

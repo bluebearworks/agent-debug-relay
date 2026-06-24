@@ -16,6 +16,12 @@ Use this skill when an agent needs VS Code to start or manage a debug session in
 npm install -g @bluebearworks/agent-debug-relay
 ```
 
+Install this skill with:
+
+```powershell
+npx skills add bluebearworks/agent-debug-relay -g -a codex claude-code opencode -s agent-debug-relay -y --copy --full-depth
+```
+
 3. Discover running VS Code windows:
 
 ```powershell

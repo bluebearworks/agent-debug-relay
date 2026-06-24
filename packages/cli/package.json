@@ -1,6 +1,6 @@
 {
   "name": "@bluebearworks/agent-debug-relay",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "CLI for discovering Agent Debug Relay VS Code windows and controlling debug sessions.",
   "license": "MIT",
   "repository": {

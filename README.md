@@ -27,6 +27,20 @@ Install the CLI:
 npm install -g @bluebearworks/agent-debug-relay
 ```
 
+Install the agent skill for the agents you use:
+
+```powershell
+npx skills add bluebearworks/agent-debug-relay -g -a codex claude-code opencode -s agent-debug-relay -y --copy --full-depth
+```
+
+Use a single `-a` target when you only want one agent:
+
+```powershell
+npx skills add bluebearworks/agent-debug-relay -g -a codex -s agent-debug-relay -y --copy --full-depth
+npx skills add bluebearworks/agent-debug-relay -g -a claude-code -s agent-debug-relay -y --copy --full-depth
+npx skills add bluebearworks/agent-debug-relay -g -a opencode -s agent-debug-relay -y --copy --full-depth
+```
+
 Reload already-open VS Code windows after installing or upgrading the extension.
 
 ## Use
@@ -68,7 +82,7 @@ npm run package:extension
 Install the packaged VSIX:
 
 ```powershell
-code --install-extension .\packages\extension\agent-debug-relay-0.1.0.vsix --force
+code --install-extension .\packages\extension\agent-debug-relay-0.1.3.vsix --force
 ```
 
 ## Protocol

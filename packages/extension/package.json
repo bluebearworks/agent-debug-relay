@@ -1,0 +1,85 @@
+{
+  "name": "agent-debug-relay",
+  "displayName": "Agent Debug Relay",
+  "description": "Allow local agents to discover running VS Code windows and start workspace debug profiles.",
+  "version": "0.1.0",
+  "publisher": "bluebearworks",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bluebearworks/agent-debug-relay.git",
+    "directory": "packages/extension"
+  },
+  "homepage": "https://github.com/bluebearworks/agent-debug-relay/tree/main/packages/extension#readme",
+  "bugs": {
+    "url": "https://github.com/bluebearworks/agent-debug-relay/issues"
+  },
+  "keywords": [
+    "vscode",
+    "debug",
+    "agents",
+    "debugger",
+    "automation"
+  ],
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:agentDebugRelay.showStatus",
+    "onCommand:agentDebugRelay.copyRegistryPath"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "agentDebugRelay.showStatus",
+        "title": "Agent Debug Relay: Show Status"
+      },
+      {
+        "command": "agentDebugRelay.copyRegistryPath",
+        "title": "Agent Debug Relay: Copy Registry Path"
+      }
+    ],
+    "configuration": {
+      "title": "Agent Debug Relay",
+      "properties": {
+        "agentDebugRelay.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Start the local agent debug endpoint for this VS Code window."
+        },
+        "agentDebugRelay.host": {
+          "type": "string",
+          "default": "127.0.0.1",
+          "description": "Host interface used by the local agent debug endpoint."
+        },
+        "agentDebugRelay.registryDir": {
+          "type": "string",
+          "default": "",
+          "description": "Directory where running VS Code window records are published. Empty uses the system temp directory."
+        },
+        "agentDebugRelay.notifyOnLaunch": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a VS Code notification when an agent starts a debug profile."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "compile": "tsc -p .",
+    "package": "vsce package --no-dependencies",
+    "watch": "tsc -watch -p ."
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.30",
+    "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^3.9.2",
+    "typescript": "^5.8.3"
+  }
+}

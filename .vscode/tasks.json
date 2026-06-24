@@ -6,8 +6,8 @@
       "script": "build",
       "group": "build",
       "problemMatcher": "$tsc",
+      "path": "packages/extension",
       "label": "npm: build"
     }
   ]
 }
-

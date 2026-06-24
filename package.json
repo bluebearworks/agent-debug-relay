@@ -1,85 +1,16 @@
 {
-  "name": "agent-debug-relay",
-  "displayName": "Agent Debug Relay",
-  "description": "Allow local agents to discover running VS Code windows and start workspace debug profiles.",
+  "name": "agent-debug-relay-monorepo",
+  "private": true,
   "version": "0.1.0",
-  "publisher": "tyler",
   "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/tylerdhebert/agent-debug-relay.git"
-  },
-  "homepage": "https://github.com/tylerdhebert/agent-debug-relay#readme",
-  "bugs": {
-    "url": "https://github.com/tylerdhebert/agent-debug-relay/issues"
-  },
-  "keywords": [
-    "vscode",
-    "debug",
-    "agents",
-    "debugger",
-    "automation"
+  "workspaces": [
+    "packages/*"
   ],
-  "engines": {
-    "vscode": "^1.90.0"
-  },
-  "categories": [
-    "Other"
-  ],
-  "activationEvents": [
-    "onStartupFinished",
-    "onCommand:agentDebugRelay.showStatus",
-    "onCommand:agentDebugRelay.copyRegistryPath"
-  ],
-  "main": "./out/extension.js",
-  "bin": {
-    "agent-debug-relay": "./bin/agent-debug-relay.js"
-  },
-  "contributes": {
-    "commands": [
-      {
-        "command": "agentDebugRelay.showStatus",
-        "title": "Agent Debug Relay: Show Status"
-      },
-      {
-        "command": "agentDebugRelay.copyRegistryPath",
-        "title": "Agent Debug Relay: Copy Registry Path"
-      }
-    ],
-    "configuration": {
-      "title": "Agent Debug Relay",
-      "properties": {
-        "agentDebugRelay.enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Start the local agent debug endpoint for this VS Code window."
-        },
-        "agentDebugRelay.host": {
-          "type": "string",
-          "default": "127.0.0.1",
-          "description": "Host interface used by the local agent debug endpoint."
-        },
-        "agentDebugRelay.registryDir": {
-          "type": "string",
-          "default": "",
-          "description": "Directory where running VS Code window records are published. Empty uses the system temp directory."
-        },
-        "agentDebugRelay.notifyOnLaunch": {
-          "type": "boolean",
-          "default": true,
-          "description": "Show a VS Code notification when an agent starts a debug profile."
-        }
-      }
-    }
-  },
   "scripts": {
-    "build": "tsc -p .",
-    "compile": "tsc -p .",
-    "watch": "tsc -watch -p ."
+    "build": "npm run --workspaces --if-present build",
+    "build:extension": "npm run build -w packages/extension",
+    "package:extension": "npm run package -w packages/extension",
+    "pack:cli": "npm pack -w packages/cli --dry-run"
   },
-  "devDependencies": {
-    "@types/node": "^22.15.30",
-    "@types/vscode": "^1.90.0",
-    "typescript": "^5.8.3"
-  }
+  "devDependencies": {}
 }

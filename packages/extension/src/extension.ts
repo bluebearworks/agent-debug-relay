@@ -9,7 +9,7 @@ import { ActiveEditorRecord, InstanceRecord, WorkspaceFolderRecord } from "./typ
 
 const HEARTBEAT_MS = 5_000;
 const CONFIG_SECTION = "agentDebugRelay";
-const EXTENSION_ID = "tyler.agent-debug-relay";
+const EXTENSION_ID = "bluebearworks.agent-debug-relay";
 const REGISTRY_NAMESPACE = "agent-debug-relay";
 
 let server: AgentDebugServer | undefined;

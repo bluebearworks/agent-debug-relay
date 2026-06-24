@@ -4,8 +4,8 @@ Use this skill when an agent needs VS Code to start a debug session in an alread
 
 ## Workflow
 
-1. Build or install the `agent-debug-relay` extension, then make sure the target VS Code window has the extension activated.
-2. Make sure the `agent-debug-relay` CLI is available on `PATH`. During local development, run `npm link` from the extension repo. For distributed use, install the package globally or provide an equivalent command shim.
+1. Install or build the `bluebearworks.agent-debug-relay` VS Code extension, then make sure the target VS Code window has the extension activated.
+2. Make sure the `agent-debug-relay` CLI is available on `PATH`. For distributed use, install `@bluebearworks/agent-debug-relay` globally with npm. During local development, run `npm link -w packages/cli` from the repo root.
 3. Discover running windows:
 
 ```powershell

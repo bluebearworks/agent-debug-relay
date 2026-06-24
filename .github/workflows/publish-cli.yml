@@ -20,9 +20,13 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
-          registry-url: https://registry.npmjs.org
+          node-version: 24
           cache: npm
+
+      - name: Check toolchain
+        run: |
+          node --version
+          npm --version
 
       - name: Install
         run: npm ci
@@ -33,5 +37,10 @@ jobs:
       - name: Check CLI package contents
         run: npm pack -w packages/cli --dry-run
 
+      - name: Dry-run publish CLI
+        if: github.event_name == 'workflow_dispatch'
+        run: npm publish -w packages/cli --access public --dry-run
+
       - name: Publish CLI
+        if: startsWith(github.ref, 'refs/tags/v')
         run: npm publish -w packages/cli --access public

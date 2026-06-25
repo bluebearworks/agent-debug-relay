@@ -1,109 +1,80 @@
 ---
 name: agent-debug-relay
-description: Start, stop, restart, and inspect VS Code debug sessions through the Agent Debug Relay extension and CLI. Use when an agent needs a running VS Code window to launch or manage an existing workspace debug profile.
+description: Start, stop, restart, and inspect VS Code debug sessions through the Agent Debug Relay CLI and VS Code extension (bluebearworks.agent-debug-relay). Use this to launch a debug profile, cycle a session after a code change or rebuild, check whether a session is active, discover available launch profiles in a workspace or multi-root solution, or control VS Code debug state without touching the UI.
 ---
 
 # Agent Debug Relay
 
-Use this skill when an agent needs VS Code to start or manage a debug session in an already-running VS Code window.
+Use this skill to start, stop, and inspect VS Code debug sessions from an agent.
+Use the CLI as the sole source of truth. Do not scan `launch.json`, `.csproj`, `.sln`, or `launchSettings.json` files directly.
 
-## Source of Truth
+## Setup
 
-Use the `agent-debug-relay` CLI as the source of truth for VS Code windows, launch profiles, debug sessions, and profile metadata. Do not start by globbing for `.vscode/launch.json`, `launchSettings.json`, `.csproj`, or solution files to discover debug profiles.
-
-The extension discovers active VS Code workspace profiles, including VS Code `launch.json` configurations, compounds, and .NET profiles from `<project>/Properties/launchSettings.json`. Inspect workspace files only when the CLI is unavailable, a relay command fails, or the CLI output points to a specific file that needs follow-up.
-
-## Workflow
-
-1. Make sure the `bluebearworks.agent-debug-relay` VS Code extension is installed and enabled in the target VS Code window.
-2. Make sure the `agent-debug-relay` CLI is available on `PATH`. Install it with:
+Install the CLI:
 
 ```powershell
 npm install -g @bluebearworks/agent-debug-relay
 ```
 
-Install this skill with:
+## Workflow
 
-```powershell
-npx skills add bluebearworks/agent-debug-relay -g -a codex claude-code opencode -s agent-debug-relay -y --copy --full-depth
-```
+1. Find the target VS Code window.
 
-3. Discover running VS Code windows:
-
+Known workspace path:
 ```powershell
 agent-debug-relay instances --workspace <repo-path> --json
 ```
+Unknown path - list all windows and select an id or repo path from the output:
+```powershell
+agent-debug-relay instances --json
+```
 
-Use windows with `protocolVersion` 2 or newer. If a command reports that a VS Code window is running an older protocol, reload that VS Code window so the installed extension code is active there.
+Use `--instance <id>` in place of `--workspace` when selecting by instance id.
 
-4. List launch profiles from the selected window:
+2. List profiles from that window.
 
 ```powershell
 agent-debug-relay profiles --workspace <repo-path> --json
+agent-debug-relay profiles --instance <id> --json
 ```
 
-Read `preLaunchTask` and `postDebugTask` from the returned profiles. Profile discovery includes VS Code `launch.json` configurations, compounds, and .NET profiles from `<project>/Properties/launchSettings.json`. When `preLaunchTask` is present, `start` lets VS Code run that task as part of the normal debug launch flow.
+Use exact profile names returned by `profiles`. In multi-root workspaces or multi-project .NET solutions, names can duplicate across folders/projects; add `--folder <folder-or-project>` to `start`, `stop`, or `restart` to disambiguate.
 
-5. Start the chosen profile by exact name:
-
-```powershell
-agent-debug-relay start "<profile name>" --workspace <repo-path> --json
-```
-
-6. List running debug sessions when lifecycle control is needed:
+3. Check running sessions before stopping.
 
 ```powershell
 agent-debug-relay sessions --workspace <repo-path> --json
 ```
 
-7. Stop the active or selected debug session before rebuilding:
+4. Start, stop, or restart.
+
+Named profile, no existing session:
 
 ```powershell
-agent-debug-relay stop --workspace <repo-path> --json
-agent-debug-relay stop "<session id or name>" --workspace <repo-path> --json
+agent-debug-relay start "<profile name>" --workspace <repo-path> --json
 ```
 
-`stop` waits for the selected debug session to terminate. Use `--wait-ms <milliseconds>` to override the default wait.
-
-8. Restart a profile when no rebuild step is needed between stop and start:
+Duplicate profile name:
 
 ```powershell
-agent-debug-relay restart "<profile name>" --workspace <repo-path> --json
+agent-debug-relay start "<profile name>" --workspace <repo-path> --folder <folder-or-project> --json
 ```
 
-For duplicate profile names in a multi-root workspace, add `--folder <workspace-folder-path-or-name>`.
-
-## Selection Rules
-
-Prefer `--workspace <repo-path>` for normal use. The CLI selects the running VS Code instance whose workspace folder contains that path, with the focused window winning ties.
-
-Use `--instance <id>` when a previous discovery step selected a specific VS Code window.
-
-## Launch Rules
-
-Start existing named launch profiles whenever possible. Named profile launches use VS Code's `vscode.debug.startDebugging` API with the profile name, which keeps behavior aligned with launching from the Run and Debug UI.
-
-Use the profile names returned by `profiles`; preserve spelling, spacing, and folder identity.
-
-For compiled services that need a rebuild, use this loop:
+Rebuild needed:
 
 ```powershell
 agent-debug-relay stop "<session id or name>" --workspace <repo-path> --json
 agent-debug-relay start "<profile name>" --workspace <repo-path> --json
 ```
 
-Prefer putting the build in the launch profile's `preLaunchTask`, so the `start` command follows the same path as a manual VS Code launch. Use explicit build commands between `stop` and `start` only when the project intentionally keeps that work outside the launch profile.
+Prefer stopping a specific session by id or name. Use `--all` only when every debug session in the selected VS Code window should stop.
 
-Use `restart` for stop-and-start only. It still lets VS Code run the profile's `preLaunchTask` during the new launch.
+No rebuild needed:
 
-Use `--all` only when every debug session in the selected VS Code window should stop.
+```powershell
+agent-debug-relay restart "<profile name>" --workspace <repo-path> --json
+```
 
 ## Troubleshooting
 
-Run:
-
-```powershell
-agent-debug-relay status --workspace <repo-path> --json
-```
-
-The default registry folder is `%TEMP%\agent-debug-relay\instances`. Set `AGENT_DEBUG_RELAY_REGISTRY_DIR` or the VS Code setting `agentDebugRelay.registryDir` when a custom location is useful.
+Run `agent-debug-relay status --workspace <repo-path> --json`; set `AGENT_DEBUG_RELAY_REGISTRY_DIR` only when the extension uses a custom registry directory.

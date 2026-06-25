@@ -7,6 +7,12 @@ description: Start, stop, restart, and inspect VS Code debug sessions through th
 
 Use this skill when an agent needs VS Code to start or manage a debug session in an already-running VS Code window.
 
+## Source of Truth
+
+Use the `agent-debug-relay` CLI as the source of truth for VS Code windows, launch profiles, debug sessions, and profile metadata. Do not start by globbing for `.vscode/launch.json`, `launchSettings.json`, `.csproj`, or solution files to discover debug profiles.
+
+The extension discovers active VS Code workspace profiles, including VS Code `launch.json` configurations, compounds, and .NET profiles from `<project>/Properties/launchSettings.json`. Inspect workspace files only when the CLI is unavailable, a relay command fails, or the CLI output points to a specific file that needs follow-up.
+
 ## Workflow
 
 1. Make sure the `bluebearworks.agent-debug-relay` VS Code extension is installed and enabled in the target VS Code window.

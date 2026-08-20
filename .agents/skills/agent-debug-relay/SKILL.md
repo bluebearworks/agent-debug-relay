@@ -1,11 +1,11 @@
 ---
 name: agent-debug-relay
-description: Start, stop, restart, control, and inspect VS Code debug sessions through the Agent Debug Relay CLI and VS Code extension (bluebearworks.agent-debug-relay). Use this to launch a debug profile, manage breakpoints, pause or step execution, inspect stacks and variables, evaluate expressions, read debug output, or check session state without touching the UI.
+description: Control VS Code debug sessions and integrated terminals through the Agent Debug Relay CLI and VS Code extension (bluebearworks.agent-debug-relay). Use this to launch or inspect a debugger, manage breakpoints, evaluate expressions, run commands in visible VS Code terminals, send terminal input, read captured output, or stop terminal processes without touching the UI.
 ---
 
 # Agent Debug Relay
 
-Use this skill to control and inspect VS Code debug sessions from an agent.
+Use this skill to control and inspect VS Code debug sessions and integrated terminals from an agent.
 Use the CLI as the sole source of truth. Do not scan `launch.json`, `.csproj`, `.sln`, or `launchSettings.json` files directly.
 
 ## Setup
@@ -90,6 +90,18 @@ agent-debug-relay output --tail 50 --workspace <repo-path> --json
 ```
 
 Use `threads`, `--thread-id`, `--frame-id`, and `--session` when the active stopped context is not the intended target. Treat `eval` as potentially side-effectful because the debug adapter evaluates the supplied expression in the target process.
+
+6. Run and manage integrated-terminal commands.
+
+```powershell
+agent-debug-relay terminal list --workspace <repo-path> --json
+agent-debug-relay terminal run "npm start" --name "dev server" --workspace <repo-path> --json
+agent-debug-relay terminal output <terminal-id> --tail 50 --workspace <repo-path> --json
+agent-debug-relay terminal input "r" --terminal <terminal-id> --no-enter --workspace <repo-path> --json
+agent-debug-relay terminal stop <terminal-id> --workspace <repo-path> --json
+```
+
+`terminal run` creates a visible VS Code terminal when `--terminal`, `--terminal-id`, and `--terminal-name` are omitted. Reuse the returned terminal id for output, input, and stop. Shell integration enables captured output and exit state; check `outputCapture` in the run response. Terminal commands execute in the user's shell and can have side effects.
 
 ## Troubleshooting
 

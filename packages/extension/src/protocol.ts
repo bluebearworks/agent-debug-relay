@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 export const CAPABILITIES = [
   "profiles",
@@ -11,5 +11,6 @@ export const CAPABILITIES = [
   "executionControl",
   "inspection",
   "debugOutput",
-  "sessionState"
+  "sessionState",
+  "terminals"
 ] as const;

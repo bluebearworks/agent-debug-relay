@@ -6,6 +6,12 @@ const path = require("node:path");
 const test = require("node:test");
 
 let breakpointId = 0;
+const terminalListeners = {
+  open: [],
+  close: [],
+  start: [],
+  end: []
+};
 const debug = {
   activeDebugSession: undefined,
   breakpoints: [],
@@ -80,6 +86,21 @@ const vscode = {
   },
   workspace: {
     workspaceFolders: []
+  },
+  window: {
+    terminals: [],
+    activeTerminal: undefined,
+    onDidOpenTerminal: terminalEvent("open"),
+    onDidCloseTerminal: terminalEvent("close"),
+    onDidStartTerminalShellExecution: terminalEvent("start"),
+    onDidEndTerminalShellExecution: terminalEvent("end"),
+    createTerminal(options) {
+      const terminal = createTerminal(options.name, options.cwd?.fsPath);
+      this.terminals.push(terminal);
+      this.activeTerminal = terminal;
+      fireTerminalEvent("open", terminal);
+      return terminal;
+    }
   }
 };
 
@@ -96,6 +117,11 @@ Module._load = originalLoad;
 test.beforeEach(() => {
   debug.activeDebugSession = undefined;
   debug.breakpoints.splice(0);
+  vscode.window.terminals.splice(0);
+  vscode.window.activeTerminal = undefined;
+  for (const listeners of Object.values(terminalListeners)) {
+    listeners.splice(0);
+  }
 });
 
 test("tracks standard DAP state, current location, output, and signed thread ids", async () => {
@@ -240,6 +266,71 @@ test("selects the newest matching run and the session with the latest output", a
   assert.equal(server.resolveOutputSessionId({}), first.id);
 });
 
+test("runs, captures, writes to, lists, and stops a visible integrated terminal", async () => {
+  const server = createServer();
+  const started = await server.runTerminalCommand({
+    command: "npm start",
+    name: "dev server",
+    cwd: "C:\\repo"
+  });
+  const terminal = vscode.window.terminals[0];
+
+  assert.equal(started.started, true);
+  assert.equal(started.created, true);
+  assert.equal(started.outputCapture, true);
+  assert.equal(started.terminal.name, "dev server");
+  assert.equal(terminal.shown, true);
+  assert.deepEqual(terminal.commands, ["npm start"]);
+
+  await new Promise((resolve) => setImmediate(resolve));
+  const output = server.recentTerminalOutput({ terminalId: started.terminal.id, tail: 1 });
+  assert.equal(output.totalCaptured, 2);
+  assert.equal(output.output[0].output, "ready\r\n");
+
+  const input = await server.sendTerminalInput({
+    terminalId: started.terminal.id,
+    input: "r",
+    addNewLine: false
+  });
+  assert.equal(input.sent, true);
+  assert.deepEqual(terminal.sentText, [{ text: "r", addNewLine: false }]);
+
+  const listed = await server.terminalRecords();
+  assert.equal(listed.activeTerminalId, started.terminal.id);
+  assert.equal(listed.terminals[0].status, "running");
+  assert.equal(listed.terminals[0].managed, true);
+
+  const stopped = await server.stopTerminal({ terminalId: started.terminal.id });
+  assert.equal(stopped.stopped, true);
+  assert.equal(terminal.disposed, true);
+  assert.equal(server.terminals.size, 0);
+  assert.equal(server.terminalStates.get(started.terminal.id).status, "closed");
+});
+
+test("falls back to sendText and reports unknown execution state without shell integration", async () => {
+  const server = createServer();
+  server.waitForShellIntegration = async () => undefined;
+  const originalCreateTerminal = vscode.window.createTerminal;
+  vscode.window.createTerminal = function createTerminalWithoutIntegration(options) {
+    const terminal = createTerminal(options.name, options.cwd?.fsPath);
+    terminal.shellIntegration = undefined;
+    this.terminals.push(terminal);
+    this.activeTerminal = terminal;
+    fireTerminalEvent("open", terminal);
+    return terminal;
+  };
+
+  try {
+    const started = await server.runTerminalCommand({ command: "npm start" });
+    const terminal = vscode.window.terminals[0];
+    assert.equal(started.outputCapture, false);
+    assert.equal(started.terminal.status, "unknown");
+    assert.deepEqual(terminal.sentText, [{ text: "npm start", addNewLine: true }]);
+  } finally {
+    vscode.window.createTerminal = originalCreateTerminal;
+  }
+});
+
 function createServer() {
   return new AgentDebugServer("127.0.0.1", "token", () => ({ id: "instance" }), () => false);
 }
@@ -251,6 +342,69 @@ function createSession(id, customRequest = async () => ({})) {
     type: "mock",
     customRequest
   };
+}
+
+function createTerminal(name = "PowerShell", cwd = "C:\\repo") {
+  const terminal = {
+    name,
+    processId: Promise.resolve(4321),
+    commands: [],
+    sentText: [],
+    shown: false,
+    disposed: false,
+    shellIntegration: {
+      cwd: { fsPath: cwd },
+      executeCommand(command) {
+        terminal.commands.push(command);
+        const execution = {
+          commandLine: { value: command },
+          cwd: { fsPath: cwd },
+          async *read() {
+            yield "starting\r\n";
+            yield "ready\r\n";
+          }
+        };
+        queueMicrotask(() => fireTerminalEvent("start", { terminal, execution }));
+        return execution;
+      }
+    },
+    show() {
+      this.shown = true;
+      vscode.window.activeTerminal = this;
+    },
+    sendText(text, addNewLine) {
+      this.sentText.push({ text, addNewLine });
+    },
+    dispose() {
+      this.disposed = true;
+      vscode.window.terminals.splice(0, vscode.window.terminals.length, ...vscode.window.terminals.filter((item) => item !== this));
+      if (vscode.window.activeTerminal === this) {
+        vscode.window.activeTerminal = undefined;
+      }
+      fireTerminalEvent("close", this);
+    }
+  };
+  return terminal;
+}
+
+function terminalEvent(kind) {
+  return (listener) => {
+    terminalListeners[kind].push(listener);
+    return {
+      dispose() {
+        const index = terminalListeners[kind].indexOf(listener);
+        if (index >= 0) {
+          terminalListeners[kind].splice(index, 1);
+        }
+      }
+    };
+  };
+}
+
+function fireTerminalEvent(kind, event) {
+  for (const listener of [...terminalListeners[kind]]) {
+    listener(event);
+  }
 }
 
 function disposableListener() {

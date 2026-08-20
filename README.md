@@ -1,6 +1,6 @@
 # Agent Debug Relay
 
-Agent Debug Relay lets local agents discover running VS Code windows and work with VS Code debug sessions from a terminal. It covers launch profiles, lifecycle, breakpoints, execution control, stack and variable inspection, expression evaluation, exception details, and recent debug output.
+Agent Debug Relay lets local agents discover running VS Code windows, work with debug sessions, and run commands in visible integrated terminals. It covers launch profiles, debugger lifecycle and inspection, terminal command execution, captured output, input, and terminal shutdown.
 
 ## Packages
 
@@ -9,7 +9,7 @@ This repo is a monorepo with two publishable parts:
 | Package | Purpose | Distribution |
 | --- | --- | --- |
 | `packages/extension` | VS Code extension that runs inside each VS Code window and publishes the local endpoint. | VS Code Marketplace / VSIX as `bluebearworks.agent-debug-relay` |
-| `packages/cli` | Terminal command agents use to discover windows, list profiles, and control debug sessions. | npm as `@bluebearworks/agent-debug-relay` |
+| `packages/cli` | Terminal command agents use to discover windows and control debug sessions and integrated terminals. | npm as `@bluebearworks/agent-debug-relay` |
 
 The CLI does not start or control VS Code by itself. It talks to endpoints published by running VS Code windows with the extension installed and enabled.
 
@@ -95,6 +95,20 @@ agent-debug-relay output --tail 50 --workspace C:\path\to\repo --json
 
 Expression evaluation is potentially side-effectful. The selected debugger evaluates the expression with DAP's `evaluate` request, so use `eval` with the same care as a debugger watch or immediate window.
 
+### Integrated terminals
+
+```powershell
+agent-debug-relay terminal list --workspace C:\path\to\repo --json
+agent-debug-relay terminal run "npm start" --name "dev server" --cwd C:\path\to\repo --workspace C:\path\to\repo --json
+agent-debug-relay terminal output terminal-1 --tail 50 --workspace C:\path\to\repo --json
+agent-debug-relay terminal input "r" --terminal terminal-1 --no-enter --workspace C:\path\to\repo --json
+agent-debug-relay terminal stop terminal-1 --workspace C:\path\to\repo --json
+```
+
+`terminal run` creates and reveals a normal VS Code integrated terminal when no terminal selector is supplied. Pass `--terminal`, `--terminal-id`, or `--terminal-name` to run in an existing terminal. `terminal input` appends Enter by default; use `--no-enter` for interactive input. `terminal stop` disposes the selected terminal and its shell process, matching VS Code's terminal trash action.
+
+VS Code shell integration provides command state, exit codes, and output capture. When shell integration is unavailable, the relay runs the command with `Terminal.sendText`; the terminal remains visible and controllable, while command output and exit state are unavailable to the relay. Captured output starts when the extension observes a command execution and does not include earlier terminal scrollback.
+
 ## Development
 
 Install dependencies:
@@ -124,7 +138,7 @@ npm run package:extension
 Install the packaged VSIX:
 
 ```powershell
-code --install-extension .\packages\extension\agent-debug-relay-0.2.0.vsix --force
+code --install-extension .\packages\extension\agent-debug-relay-0.3.0.vsix --force
 ```
 
 ## Protocol
@@ -133,8 +147,8 @@ Each instance record includes:
 
 ```json
 {
-  "extensionVersion": "0.2.0",
-  "protocolVersion": 3,
+  "extensionVersion": "0.3.0",
+  "protocolVersion": 4,
   "capabilities": [
     "profiles",
     "profileLifecycleFields",
@@ -146,7 +160,8 @@ Each instance record includes:
     "executionControl",
     "inspection",
     "debugOutput",
-    "sessionState"
+    "sessionState",
+    "terminals"
   ]
 }
 ```
@@ -172,3 +187,9 @@ Session and status responses include `running`, `paused`, or `terminated` state.
 The extension captures the latest 1,000 DAP `output` events per session in memory. `output` returns the newest 100 entries by default; use `--tail` or `--count` to select another amount.
 
 Interactive command availability follows the selected debug adapter's DAP capabilities and current state. Stack, scope, variable, evaluation, and exception requests generally require a paused session. Conditional breakpoint syntax and expression behavior are defined by the adapter and target language.
+
+## Terminal State and Shell Integration
+
+Terminal responses include relay ids, terminal names, active/managed state, working directory, process id, current command, shell-integration availability, and `idle`, `running`, `exited`, `closed`, or `unknown` status. `unknown` means a command was sent without shell integration, so VS Code cannot report its completion. The extension retains captured output and state for the 20 most recently closed terminals and the latest 1,000 output chunks per terminal.
+
+The relay uses VS Code's stable terminal and shell-integration APIs. It can control terminals in the selected VS Code window, including terminals created outside the relay. Output capture begins with shell executions observed while the extension is active.

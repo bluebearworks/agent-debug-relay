@@ -27,7 +27,8 @@ const COMMAND_CAPABILITIES = {
   eval: ["inspection"],
   threads: ["inspection"],
   exception: ["inspection"],
-  output: ["debugOutput"]
+  output: ["debugOutput"],
+  terminal: ["terminals"]
 };
 
 main().catch((error) => {
@@ -247,6 +248,64 @@ async function main() {
     return;
   }
 
+  if (command === "terminal") {
+    const action = positional[0];
+
+    if (action === "list") {
+      output(options, await requestJson(selected.record, "GET", "/terminals"));
+      return;
+    }
+
+    if (action === "run") {
+      const terminalCommand = positional.slice(1).join(" ").trim() || options.command;
+      if (!terminalCommand) {
+        throw new Error("terminal command is required");
+      }
+      output(options, await requestJson(selected.record, "POST", "/terminals/run", {
+        ...terminalOptions(options),
+        command: terminalCommand,
+        name: options.name,
+        cwd: options.cwd ? path.resolve(options.cwd) : undefined
+      }));
+      return;
+    }
+
+    if (action === "input") {
+      const input = positional.slice(1).join(" ") || options.input;
+      if (!input) {
+        throw new Error("terminal input is required");
+      }
+      output(options, await requestJson(selected.record, "POST", "/terminals/input", {
+        ...terminalOptions(options),
+        input,
+        addNewLine: options.noEnter ? false : true
+      }));
+      return;
+    }
+
+    if (action === "stop") {
+      const terminal = positional.slice(1).join(" ").trim() || options.terminal;
+      output(options, await requestJson(selected.record, "POST", "/terminals/stop", {
+        ...terminalOptions(options),
+        terminal: terminal || undefined
+      }));
+      return;
+    }
+
+    if (action === "output") {
+      const terminal = positional.slice(1).join(" ").trim() || options.terminal;
+      const tail = options.tail ?? options.count;
+      output(options, await requestJson(selected.record, "POST", "/terminals/output", {
+        ...terminalOptions(options),
+        terminal: terminal || undefined,
+        tail: integerOption(tail, "tail")
+      }));
+      return;
+    }
+
+    throw new Error("terminal action must be list, run, input, output, or stop");
+  }
+
   throw new Error(`unknown command: ${command}`);
 }
 
@@ -263,7 +322,7 @@ function parseArgs(args) {
       const normalized = key.replace(/-([a-z])/g, (_, char) => char.toUpperCase());
       const next = args[index + 1];
 
-      if (["json", "help", "no-debug", "all"].includes(key)) {
+      if (["json", "help", "no-debug", "all", "no-enter"].includes(key)) {
         options[normalized] = true;
       } else {
         if (!next) {
@@ -459,6 +518,14 @@ function sessionOptions(options) {
   };
 }
 
+function terminalOptions(options) {
+  return {
+    terminal: options.terminal,
+    terminalId: options.terminalId,
+    terminalName: options.terminalName
+  };
+}
+
 function requestJson(record, method, route, body) {
   const payload = body ? JSON.stringify(dropUndefined(body)) : undefined;
 
@@ -541,6 +608,11 @@ function output(options, value) {
     return;
   }
 
+  if (value && Array.isArray(value.terminals)) {
+    printTerminals(value);
+    return;
+  }
+
   console.log(JSON.stringify(value, null, 2));
 }
 
@@ -557,6 +629,14 @@ function printSessions(value) {
     const state = session.state?.status || "unknown";
     const reason = session.state?.stopReason ? `\t${session.state.stopReason}` : "";
     console.log(`${session.id}\t${session.id === activeId ? "active" : "background"}\t${state}\t${session.name}\t${session.type}\t${session.workspaceFolder || "workspace"}${reason}`);
+  }
+}
+
+function printTerminals(value) {
+  for (const terminal of value.terminals) {
+    const active = terminal.id === value.activeTerminalId ? "active" : "background";
+    const integration = terminal.shellIntegration ? "captured" : "uncaptured";
+    console.log(`${terminal.id}\t${active}\t${terminal.status}\t${integration}\t${terminal.name}\t${terminal.cwd || "workspace"}`);
   }
 }
 
@@ -583,6 +663,11 @@ Usage:
   agent-debug-relay threads [debug options] [--json]
   agent-debug-relay exception [--thread-id <id>] [debug options] [--json]
   agent-debug-relay output [--tail <count>|--count <count>] [debug options] [--json]
+  agent-debug-relay terminal list [target options] [--json]
+  agent-debug-relay terminal run <command> [--name <name>] [--cwd <path>] [--terminal <id or name>] [target options] [--json]
+  agent-debug-relay terminal input <text> [--terminal <id or name>] [--no-enter] [target options] [--json]
+  agent-debug-relay terminal output [id or name] [--tail <count>|--count <count>] [target options] [--json]
+  agent-debug-relay terminal stop [id or name] [target options] [--json]
   agent-debug-relay status [--workspace <path>] [--instance <id>] [--json]
 
 Options:
@@ -592,6 +677,12 @@ Options:
   --session <id or name>   Select a debug session to stop before restart.
   --session-id <id>        Select a debug session by id.
   --session-name <name>    Select a debug session by exact name.
+  --terminal <id or name>  Select an integrated terminal; terminal run creates one when omitted.
+  --terminal-id <id>       Select an integrated terminal by relay id.
+  --terminal-name <name>   Select an integrated terminal by exact name.
+  --name <name>            Name a terminal created by terminal run.
+  --cwd <path>             Set the working directory for a created terminal.
+  --no-enter               Send terminal input without appending Enter.
   --thread-id <id>         Select a debugger thread; defaults to the stopped or first thread.
   --frame-id <id>          Select a stack frame; defaults to the top frame.
   --tail <count>           Return the newest captured debug output entries. Defaults to 100.

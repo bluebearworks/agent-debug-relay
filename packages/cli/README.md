@@ -1,6 +1,6 @@
 # Agent Debug Relay CLI
 
-CLI for discovering Agent Debug Relay VS Code windows and controlling and inspecting debug sessions.
+CLI for discovering Agent Debug Relay VS Code windows and controlling debug sessions and integrated terminals.
 
 Install:
 
@@ -26,9 +26,12 @@ agent-debug-relay stack --workspace C:\path\to\repo --json
 agent-debug-relay locals --workspace C:\path\to\repo --json
 agent-debug-relay eval "customer.Total" --workspace C:\path\to\repo --json
 agent-debug-relay output --tail 50 --workspace C:\path\to\repo --json
+agent-debug-relay terminal run "npm start" --name "dev server" --workspace C:\path\to\repo --json
+agent-debug-relay terminal output terminal-1 --tail 50 --workspace C:\path\to\repo --json
+agent-debug-relay terminal stop terminal-1 --workspace C:\path\to\repo --json
 ```
 
-Run `agent-debug-relay --help` for breakpoint, execution, inspection, output, and session-selection options. Every command accepts `--json` for agent-friendly structured output.
+Run `agent-debug-relay --help` for debugger, terminal, output, and selection options. Every command accepts `--json` for agent-friendly structured output.
 
 `eval` sends the expression to the selected debug adapter and can execute side effects, like evaluation in a debugger watch or immediate window.
 

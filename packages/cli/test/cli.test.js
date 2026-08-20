@@ -19,6 +19,8 @@ test("help documents the interactive debugger commands", async () => {
   assert.match(stdout, /pause\|continue\|step-over\|step-in\|step-out/);
   assert.match(stdout, /variables <variablesReference>/);
   assert.match(stdout, /output \[--tail <count>\|--count <count>\]/);
+  assert.match(stdout, /terminal run <command>/);
+  assert.match(stdout, /terminal stop \[id or name\]/);
 });
 
 test("breakpoint add sends an absolute source location and condition", async (t) => {
@@ -84,6 +86,35 @@ test("status uses the authenticated session-state endpoint when advertised", asy
   const text = await runText(["status", ...relay.targetArgs]);
   assert.match(text, /"ok": true/);
   assert.match(text, /"sessions": \[\]/);
+});
+
+test("terminal commands preserve command text, selectors, cwd, input mode, and output tail", async (t) => {
+  const relay = await createRelay(t, ["terminals"]);
+  const started = await runJson([
+    "terminal", "run", "npm", "start", "--name", "dev server", "--cwd", "packages/cli", ...relay.targetArgs
+  ]);
+  assert.equal(started.url, "/terminals/run");
+  assert.deepEqual(started.body, {
+    command: "npm start",
+    name: "dev server",
+    cwd: path.resolve(repoPath, "packages/cli")
+  });
+
+  const input = await runJson([
+    "terminal", "input", "r", "--terminal-id", "terminal-1", "--no-enter", ...relay.targetArgs
+  ]);
+  assert.equal(input.url, "/terminals/input");
+  assert.deepEqual(input.body, { terminalId: "terminal-1", input: "r", addNewLine: false });
+
+  const output = await runJson([
+    "terminal", "output", "terminal-1", "--tail", "25", ...relay.targetArgs
+  ]);
+  assert.equal(output.url, "/terminals/output");
+  assert.deepEqual(output.body, { terminal: "terminal-1", tail: 25 });
+
+  const stopped = await runJson(["terminal", "stop", "terminal-1", ...relay.targetArgs]);
+  assert.equal(stopped.url, "/terminals/stop");
+  assert.deepEqual(stopped.body, { terminal: "terminal-1" });
 });
 
 async function runJson(args) {

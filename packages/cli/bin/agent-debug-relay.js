@@ -14,7 +14,20 @@ const COMMAND_CAPABILITIES = {
   profiles: ["profileLifecycleFields"],
   sessions: ["sessions"],
   stop: ["stop", "stopPolling"],
-  restart: ["restart", "stopPolling"]
+  restart: ["restart", "stopPolling"],
+  breakpoint: ["breakpoints"],
+  pause: ["executionControl"],
+  continue: ["executionControl"],
+  "step-over": ["executionControl"],
+  "step-in": ["executionControl"],
+  "step-out": ["executionControl"],
+  stack: ["inspection"],
+  locals: ["inspection"],
+  variables: ["inspection"],
+  eval: ["inspection"],
+  threads: ["inspection"],
+  exception: ["inspection"],
+  output: ["debugOutput"]
 };
 
 main().catch((error) => {
@@ -42,7 +55,9 @@ async function main() {
   ensureCompatible(selected.record, COMMAND_CAPABILITIES[command] || []);
 
   if (command === "status") {
-    const status = await requestJson(selected.record, "GET", "/health");
+    const capabilities = Array.isArray(selected.record.capabilities) ? selected.record.capabilities : [];
+    const route = capabilities.includes("sessionState") ? "/status" : "/health";
+    const status = await requestJson(selected.record, "GET", route);
     output(options, status);
     return;
   }
@@ -115,6 +130,120 @@ async function main() {
     });
 
     output(options, result);
+    return;
+  }
+
+  if (command === "breakpoint") {
+    const action = positional[0];
+
+    if (action === "list") {
+      output(options, await requestJson(selected.record, "GET", "/breakpoints"));
+      return;
+    }
+
+    if (action === "clear") {
+      output(options, await requestJson(selected.record, "POST", "/breakpoints/clear", {}));
+      return;
+    }
+
+    if (action === "add") {
+      const location = parseSourceLocation(positional.slice(1).join(" "));
+      output(options, await requestJson(selected.record, "POST", "/breakpoints", {
+        ...location,
+        condition: options.condition
+      }));
+      return;
+    }
+
+    if (action === "remove") {
+      const location = positional.length > 1 ? parseSourceLocation(positional.slice(1).join(" ")) : {};
+      if (!options.id && !location.file) {
+        throw new Error("breakpoint id or <file>:<line> is required");
+      }
+      output(options, await requestJson(selected.record, "POST", "/breakpoints/remove", {
+        id: options.id,
+        ...location
+      }));
+      return;
+    }
+
+    throw new Error("breakpoint action must be add, remove, list, or clear");
+  }
+
+  if (["pause", "continue", "step-over", "step-in", "step-out"].includes(command)) {
+    output(options, await requestJson(selected.record, "POST", "/debug-sessions/control", {
+      ...sessionOptions(options),
+      action: command,
+      threadId: integerOption(options.threadId, "thread-id", { signed: true })
+    }));
+    return;
+  }
+
+  if (command === "stack") {
+    output(options, await requestJson(selected.record, "POST", "/debug-sessions/stack-trace", {
+      ...sessionOptions(options),
+      threadId: integerOption(options.threadId, "thread-id", { signed: true }),
+      startFrame: integerOption(options.start, "start"),
+      levels: integerOption(options.levels, "levels")
+    }));
+    return;
+  }
+
+  if (command === "locals") {
+    output(options, await requestJson(selected.record, "POST", "/debug-sessions/locals", {
+      ...sessionOptions(options),
+      threadId: integerOption(options.threadId, "thread-id", { signed: true }),
+      frameId: integerOption(options.frameId, "frame-id", { signed: true })
+    }));
+    return;
+  }
+
+  if (command === "variables") {
+    const reference = positional.join(" ").trim() || options.reference || options.variablesReference;
+    output(options, await requestJson(selected.record, "POST", "/debug-sessions/variables", {
+      ...sessionOptions(options),
+      variablesReference: integerOption(reference, "variables-reference", { required: true, positive: true }),
+      filter: options.filter,
+      start: integerOption(options.start, "start"),
+      count: integerOption(options.count, "count")
+    }));
+    return;
+  }
+
+  if (command === "eval") {
+    const expression = positional.join(" ").trim() || options.expression;
+    if (!expression) {
+      throw new Error("expression is required");
+    }
+    output(options, await requestJson(selected.record, "POST", "/debug-sessions/evaluate", {
+      ...sessionOptions(options),
+      expression,
+      frameId: integerOption(options.frameId, "frame-id", { signed: true }),
+      threadId: integerOption(options.threadId, "thread-id", { signed: true }),
+      context: options.context
+    }));
+    return;
+  }
+
+  if (command === "threads") {
+    output(options, await requestJson(selected.record, "POST", "/debug-sessions/threads", sessionOptions(options)));
+    return;
+  }
+
+  if (command === "exception") {
+    output(options, await requestJson(selected.record, "POST", "/debug-sessions/exception-info", {
+      ...sessionOptions(options),
+      threadId: integerOption(options.threadId, "thread-id", { signed: true })
+    }));
+    return;
+  }
+
+  if (command === "output") {
+    const tail = options.tail ?? options.count;
+    output(options, await requestJson(selected.record, "POST", "/debug-sessions/output", {
+      ...sessionOptions(options),
+      tail: integerOption(tail, "tail")
+    }));
     return;
   }
 
@@ -310,6 +439,26 @@ function normalizeLoose(value) {
   return String(value).replace(/\\/g, "/").toLowerCase();
 }
 
+function parseSourceLocation(value) {
+  const match = /^(.*):(\d+)$/.exec(value);
+  if (!match || !match[1]) {
+    throw new Error("breakpoint location must be <file>:<line>");
+  }
+  const line = Number(match[2]);
+  if (!Number.isInteger(line) || line <= 0) {
+    throw new Error("breakpoint line must be a positive integer");
+  }
+  return { file: path.resolve(match[1]), line };
+}
+
+function sessionOptions(options) {
+  return {
+    session: options.session,
+    sessionId: options.sessionId,
+    sessionName: options.sessionName
+  };
+}
+
 function requestJson(record, method, route, body) {
   const payload = body ? JSON.stringify(dropUndefined(body)) : undefined;
 
@@ -382,6 +531,11 @@ function output(options, value) {
     return;
   }
 
+  if (value && value.ok === true && Array.isArray(value.sessions)) {
+    console.log(JSON.stringify(value, null, 2));
+    return;
+  }
+
   if (value && Array.isArray(value.sessions)) {
     printSessions(value);
     return;
@@ -400,7 +554,9 @@ function printInstance(record) {
 function printSessions(value) {
   const activeId = value.active?.id;
   for (const session of value.sessions) {
-    console.log(`${session.id}\t${session.id === activeId ? "active" : "background"}\t${session.name}\t${session.type}\t${session.workspaceFolder || "workspace"}`);
+    const state = session.state?.status || "unknown";
+    const reason = session.state?.stopReason ? `\t${session.state.stopReason}` : "";
+    console.log(`${session.id}\t${session.id === activeId ? "active" : "background"}\t${state}\t${session.name}\t${session.type}\t${session.workspaceFolder || "workspace"}${reason}`);
   }
 }
 
@@ -414,6 +570,19 @@ Usage:
   agent-debug-relay start <profile name> [--workspace <path>] [--folder <folder>] [--instance <id>] [--no-debug] [--json]
   agent-debug-relay stop [session id or name] [--workspace <path>] [--instance <id>] [--all] [--wait-ms <ms>] [--json]
   agent-debug-relay restart <profile name> [--workspace <path>] [--folder <folder>] [--instance <id>] [--session <id or name>] [--all] [--wait-ms <ms>] [--no-debug] [--json]
+  agent-debug-relay breakpoint add <file>:<line> [--condition <expression>] [target options] [--json]
+  agent-debug-relay breakpoint remove <file>:<line> [target options] [--json]
+  agent-debug-relay breakpoint remove --id <breakpoint id> [target options] [--json]
+  agent-debug-relay breakpoint list [target options] [--json]
+  agent-debug-relay breakpoint clear [target options] [--json]
+  agent-debug-relay pause|continue|step-over|step-in|step-out [debug options] [--json]
+  agent-debug-relay stack [--thread-id <id>] [--start <frame>] [--levels <count>] [debug options] [--json]
+  agent-debug-relay locals [--thread-id <id>] [--frame-id <id>] [debug options] [--json]
+  agent-debug-relay variables <variablesReference> [--filter named|indexed] [--start <index>] [--count <count>] [debug options] [--json]
+  agent-debug-relay eval <expression> [--frame-id <id>] [--context <context>] [debug options] [--json]
+  agent-debug-relay threads [debug options] [--json]
+  agent-debug-relay exception [--thread-id <id>] [debug options] [--json]
+  agent-debug-relay output [--tail <count>|--count <count>] [debug options] [--json]
   agent-debug-relay status [--workspace <path>] [--instance <id>] [--json]
 
 Options:
@@ -421,6 +590,12 @@ Options:
   --instance <id>         Select a specific registered VS Code window.
   --folder <folder>       Disambiguate duplicate profile names in multi-root workspaces.
   --session <id or name>   Select a debug session to stop before restart.
+  --session-id <id>        Select a debug session by id.
+  --session-name <name>    Select a debug session by exact name.
+  --thread-id <id>         Select a debugger thread; defaults to the stopped or first thread.
+  --frame-id <id>          Select a stack frame; defaults to the top frame.
+  --tail <count>           Return the newest captured debug output entries. Defaults to 100.
+  --count <count>          Alias for --tail on the output command.
   --all                   Stop all debug sessions in the selected VS Code window.
   --wait-ms <ms>           Wait this long for stopped sessions to terminate. Defaults to 15000.
   --no-debug              Start without attaching a debugger.
@@ -449,5 +624,21 @@ function numberOption(value, label) {
     throw new Error(`--${label} must be a non-negative number`);
   }
 
+  return parsed;
+}
+
+function integerOption(value, label, constraints = {}) {
+  if (value === undefined) {
+    if (constraints.required) {
+      throw new Error(`--${label} is required`);
+    }
+    return undefined;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || (!constraints.signed && parsed < 0) || (constraints.positive && parsed === 0)) {
+    const requirement = constraints.positive ? "a positive integer" : constraints.signed ? "an integer" : "a non-negative integer";
+    throw new Error(`--${label} must be ${requirement}`);
+  }
   return parsed;
 }

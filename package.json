@@ -9,6 +9,7 @@
   "scripts": {
     "build": "npm run --workspaces --if-present build",
     "build:extension": "npm run build -w packages/extension",
+    "test": "npm test --workspaces --if-present",
     "package:extension": "npm run package -w packages/extension",
     "pack:cli": "npm pack -w packages/cli --dry-run"
   },

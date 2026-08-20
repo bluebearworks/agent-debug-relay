@@ -2,17 +2,28 @@ import * as http from "http";
 import * as vscode from "vscode";
 import { getLaunchProfiles } from "./launchProfiles";
 import { CAPABILITIES, PROTOCOL_VERSION } from "./protocol";
-import { InstanceRecord } from "./types";
+import { DebugSessionState, DebugSourceLocation, InstanceRecord } from "./types";
 
 type RecordProvider = () => InstanceRecord;
 type JsonObject = Record<string, unknown>;
 const DEFAULT_STOP_WAIT_MS = 15_000;
 const STOP_POLL_MS = 100;
+const OUTPUT_LIMIT = 1_000;
+const TERMINATED_SESSION_LIMIT = 20;
+
+type OutputRecord = JsonObject & {
+  sequence: number;
+  timestamp: string;
+};
 
 export class AgentDebugServer {
   private server: http.Server | undefined;
   private portValue: number | undefined;
   private readonly sessions = new Map<string, vscode.DebugSession>();
+  private readonly sessionStates = new Map<string, DebugSessionState>();
+  private readonly terminatedSessions = new Map<string, JsonObject>();
+  private readonly outputBySession = new Map<string, OutputRecord[]>();
+  private outputSequence = 0;
   private readonly disposables: vscode.Disposable[] = [];
 
   constructor(
@@ -23,15 +34,23 @@ export class AgentDebugServer {
   ) {
     const active = vscode.debug.activeDebugSession;
     if (active) {
-      this.sessions.set(active.id, active);
+      this.trackSession(active);
     }
 
     this.disposables.push(
       vscode.debug.onDidStartDebugSession((session) => {
-        this.sessions.set(session.id, session);
+        this.trackSession(session);
       }),
       vscode.debug.onDidTerminateDebugSession((session) => {
+        this.markTerminated(session);
         this.sessions.delete(session.id);
+      }),
+      vscode.debug.registerDebugAdapterTrackerFactory("*", {
+        createDebugAdapterTracker: (session) => ({
+          onDidSendMessage: (message) => {
+            void this.handleAdapterMessage(session, message);
+          }
+        })
       })
     );
   }
@@ -105,6 +124,23 @@ export class AgentDebugServer {
 
     this.requireAuth(request);
 
+    if (url.pathname === "/status" && method === "GET") {
+      const record = this.getRecord();
+      writeJson(response, 200, {
+        ok: true,
+        id: record.id,
+        extensionVersion: record.extensionVersion,
+        protocolVersion: PROTOCOL_VERSION,
+        capabilities: [...CAPABILITIES],
+        pid: record.pid,
+        updatedAt: record.updatedAt,
+        active: this.debugSessionRecord(vscode.debug.activeDebugSession),
+        sessions: this.sessionRecords(),
+        terminated: [...this.terminatedSessions.values()]
+      });
+      return;
+    }
+
     if (url.pathname === "/instance" && method === "GET") {
       writeJson(response, 200, this.getRecord());
       return;
@@ -119,9 +155,32 @@ export class AgentDebugServer {
 
     if (url.pathname === "/debug-sessions" && method === "GET") {
       writeJson(response, 200, {
-        active: debugSessionRecord(vscode.debug.activeDebugSession),
-        sessions: this.sessionRecords()
+        active: this.debugSessionRecord(vscode.debug.activeDebugSession),
+        sessions: this.sessionRecords(),
+        terminated: [...this.terminatedSessions.values()]
       });
+      return;
+    }
+
+    if (url.pathname === "/breakpoints" && method === "GET") {
+      writeJson(response, 200, { breakpoints: vscode.debug.breakpoints.map(breakpointRecord) });
+      return;
+    }
+
+    if (url.pathname === "/breakpoints" && method === "POST") {
+      writeJson(response, 200, await this.addBreakpoint(await readJsonBody(request)));
+      return;
+    }
+
+    if (url.pathname === "/breakpoints/remove" && method === "POST") {
+      writeJson(response, 200, this.removeBreakpoint(await readJsonBody(request)));
+      return;
+    }
+
+    if (url.pathname === "/breakpoints/clear" && method === "POST") {
+      const breakpoints = vscode.debug.breakpoints;
+      vscode.debug.removeBreakpoints(breakpoints);
+      writeJson(response, 200, { cleared: breakpoints.length, breakpoints: [] });
       return;
     }
 
@@ -143,6 +202,46 @@ export class AgentDebugServer {
       const body = await readJsonBody(request);
       const result = await this.restartDebugging(body);
       writeJson(response, 200, result);
+      return;
+    }
+
+    if (url.pathname === "/debug-sessions/control" && method === "POST") {
+      writeJson(response, 200, await this.controlDebugging(await readJsonBody(request)));
+      return;
+    }
+
+    if (url.pathname === "/debug-sessions/stack-trace" && method === "POST") {
+      writeJson(response, 200, await this.stackTrace(await readJsonBody(request)));
+      return;
+    }
+
+    if (url.pathname === "/debug-sessions/locals" && method === "POST") {
+      writeJson(response, 200, await this.locals(await readJsonBody(request)));
+      return;
+    }
+
+    if (url.pathname === "/debug-sessions/variables" && method === "POST") {
+      writeJson(response, 200, await this.variables(await readJsonBody(request)));
+      return;
+    }
+
+    if (url.pathname === "/debug-sessions/evaluate" && method === "POST") {
+      writeJson(response, 200, await this.evaluate(await readJsonBody(request)));
+      return;
+    }
+
+    if (url.pathname === "/debug-sessions/threads" && method === "POST") {
+      writeJson(response, 200, await this.threads(await readJsonBody(request)));
+      return;
+    }
+
+    if (url.pathname === "/debug-sessions/exception-info" && method === "POST") {
+      writeJson(response, 200, await this.exceptionInfo(await readJsonBody(request)));
+      return;
+    }
+
+    if (url.pathname === "/debug-sessions/output" && method === "POST") {
+      writeJson(response, 200, this.recentOutput(await readJsonBody(request)));
       return;
     }
 
@@ -188,7 +287,7 @@ export class AgentDebugServer {
       projectPath: stringField(profile?.projectPath),
       launchSettingsPath: stringField(profile?.launchSettingsPath),
       launchSettingsProfile: stringField(profile?.launchSettingsProfile),
-      active: debugSessionRecord(vscode.debug.activeDebugSession)
+      active: this.debugSessionRecord(vscode.debug.activeDebugSession)
     };
   }
 
@@ -198,7 +297,7 @@ export class AgentDebugServer {
     const waitMs = numberBodyField(body, "waitMs") ?? DEFAULT_STOP_WAIT_MS;
     const session = all ? undefined : this.findSession(body);
     const targetSessions = all ? [...this.sessions.values()] : session ? [session] : [];
-    const stopped = targetSessions.map((targetSession) => debugSessionRecord(targetSession)).filter((targetSession) => targetSession !== undefined);
+    const stopped = targetSessions.map((targetSession) => this.debugSessionRecord(targetSession)).filter((targetSession) => targetSession !== undefined);
     const stoppedIds = targetSessions.map((targetSession) => targetSession.id);
 
     if (!all && !session) {
@@ -206,7 +305,7 @@ export class AgentDebugServer {
         return {
           stopped: false,
           terminated: true,
-          active: debugSessionRecord(vscode.debug.activeDebugSession),
+          active: this.debugSessionRecord(vscode.debug.activeDebugSession),
           sessions: this.sessionRecords()
         };
       }
@@ -230,7 +329,7 @@ export class AgentDebugServer {
       terminated: wait.terminated,
       waitMs,
       stoppedSessions: stopped,
-      active: debugSessionRecord(vscode.debug.activeDebugSession)
+      active: this.debugSessionRecord(vscode.debug.activeDebugSession)
     };
   }
 
@@ -256,7 +355,7 @@ export class AgentDebugServer {
   }
 
   private sessionRecords(): JsonObject[] {
-    return [...this.sessions.values()].map((session) => debugSessionRecord(session)).filter((session) => session !== undefined);
+    return [...this.sessions.values()].map((session) => this.debugSessionRecord(session)).filter((session) => session !== undefined);
   }
 
   private async waitForSessionsToStop(sessionIds: string[], waitMs: number): Promise<{ terminated: boolean; remaining: JsonObject[] }> {
@@ -290,8 +389,339 @@ export class AgentDebugServer {
     return sessionIds
       .map((sessionId) => this.sessions.get(sessionId))
       .filter((session) => session !== undefined)
-      .map((session) => debugSessionRecord(session))
+      .map((session) => this.debugSessionRecord(session))
       .filter((session) => session !== undefined);
+  }
+
+  private trackSession(session: vscode.DebugSession): void {
+    this.sessions.set(session.id, session);
+    this.terminatedSessions.delete(session.id);
+    this.sessionStates.set(session.id, {
+      status: "running",
+      lastEventAt: new Date().toISOString()
+    });
+  }
+
+  private markTerminated(session: vscode.DebugSession): void {
+    const state: DebugSessionState = {
+      ...(this.sessionStates.get(session.id) ?? { lastEventAt: new Date().toISOString() }),
+      status: "terminated",
+      lastEventAt: new Date().toISOString()
+    };
+    this.sessionStates.set(session.id, state);
+    this.terminatedSessions.set(session.id, this.debugSessionRecord(session) ?? { id: session.id, state });
+
+    while (this.terminatedSessions.size > TERMINATED_SESSION_LIMIT) {
+      const oldestId = this.terminatedSessions.keys().next().value as string | undefined;
+      if (!oldestId) {
+        break;
+      }
+      this.terminatedSessions.delete(oldestId);
+      this.sessionStates.delete(oldestId);
+      this.outputBySession.delete(oldestId);
+    }
+  }
+
+  private async handleAdapterMessage(session: vscode.DebugSession, message: unknown): Promise<void> {
+    const eventMessage = asObject(message);
+    if (eventMessage?.type !== "event" || typeof eventMessage.event !== "string") {
+      return;
+    }
+
+    if (!this.sessions.has(session.id)) {
+      this.trackSession(session);
+    }
+
+    const event = eventMessage.event;
+    const body = asObject(eventMessage.body) ?? {};
+    const now = new Date().toISOString();
+    const current = this.sessionStates.get(session.id) ?? { status: "running", lastEventAt: now };
+
+    if (event === "stopped") {
+      const state: DebugSessionState = {
+        ...current,
+        status: "paused",
+        stopReason: stringField(body.reason),
+        stopDescription: stringField(body.description) ?? stringField(body.text),
+        activeThreadId: numberField(body.threadId),
+        allThreadsStopped: booleanField(body.allThreadsStopped),
+        location: undefined,
+        lastEventAt: now
+      };
+      this.sessionStates.set(session.id, state);
+      await this.refreshStoppedLocation(session, state);
+      return;
+    }
+
+    if (event === "continued") {
+      this.sessionStates.set(session.id, {
+        status: "running",
+        activeThreadId: numberField(body.threadId) ?? current.activeThreadId,
+        lastEventAt: now
+      });
+      return;
+    }
+
+    if (event === "terminated") {
+      this.markTerminated(session);
+      return;
+    }
+
+    if (event === "output") {
+      const records = this.outputBySession.get(session.id) ?? [];
+      records.push({
+        sequence: ++this.outputSequence,
+        timestamp: now,
+        ...body
+      });
+      if (records.length > OUTPUT_LIMIT) {
+        records.splice(0, records.length - OUTPUT_LIMIT);
+      }
+      this.outputBySession.set(session.id, records);
+    }
+  }
+
+  private async refreshStoppedLocation(session: vscode.DebugSession, state: DebugSessionState): Promise<void> {
+    try {
+      const threadId = state.activeThreadId ?? await this.resolveThreadId(session, {});
+      const response = asObject(await session.customRequest("stackTrace", {
+        threadId,
+        startFrame: 0,
+        levels: 20
+      }));
+      const location = arrayField(response, "stackFrames")
+        .map(asObject)
+        .filter((frame): frame is JsonObject => frame !== undefined)
+        .map(sourceLocation)
+        .find((candidate) => candidate !== undefined);
+      const latest = this.sessionStates.get(session.id);
+      if (latest?.status === "paused" && (latest.activeThreadId === undefined || latest.activeThreadId === threadId)) {
+        this.sessionStates.set(session.id, { ...latest, activeThreadId: threadId, location });
+      }
+    } catch {
+      // Some adapters do not make the top frame available immediately after stopped.
+    }
+  }
+
+  private debugSessionRecord(session: vscode.DebugSession | undefined): JsonObject | undefined {
+    if (!session) {
+      return undefined;
+    }
+
+    return {
+      id: session.id,
+      name: session.name,
+      type: session.type,
+      workspaceFolder: session.workspaceFolder?.uri.toString(),
+      state: this.sessionStates.get(session.id) ?? {
+        status: "running",
+        lastEventAt: new Date().toISOString()
+      }
+    };
+  }
+
+  private async addBreakpoint(body: JsonObject): Promise<JsonObject> {
+    const file = requiredString(body, "file");
+    const line = requiredPositiveInteger(body, "line");
+    const condition = stringBodyField(body, "condition");
+    const breakpoint = new vscode.SourceBreakpoint(
+      new vscode.Location(vscode.Uri.file(file), new vscode.Position(line - 1, 0)),
+      true,
+      condition
+    );
+    vscode.debug.addBreakpoints([breakpoint]);
+    return { added: breakpointRecord(breakpoint), breakpoints: vscode.debug.breakpoints.map(breakpointRecord) };
+  }
+
+  private removeBreakpoint(body: JsonObject): JsonObject {
+    const id = stringBodyField(body, "id");
+    const file = stringBodyField(body, "file");
+    const line = numberBodyField(body, "line");
+    const matches = vscode.debug.breakpoints.filter((breakpoint) => {
+      if (id) {
+        return breakpoint.id === id;
+      }
+      if (!(breakpoint instanceof vscode.SourceBreakpoint) || !file || line === undefined) {
+        return false;
+      }
+      return normalizeFilePath(breakpoint.location.uri.fsPath) === normalizeFilePath(file)
+        && breakpoint.location.range.start.line + 1 === line;
+    });
+
+    if (matches.length === 0) {
+      throw Object.assign(new Error("breakpoint not found"), { statusCode: 404 });
+    }
+
+    vscode.debug.removeBreakpoints(matches);
+    return { removed: matches.map(breakpointRecord), breakpoints: vscode.debug.breakpoints.map(breakpointRecord) };
+  }
+
+  private async controlDebugging(body: JsonObject): Promise<JsonObject> {
+    const session = this.requireSession(body);
+    const action = requiredString(body, "action");
+    const requests: Record<string, string> = {
+      pause: "pause",
+      continue: "continue",
+      "step-over": "next",
+      "step-in": "stepIn",
+      "step-out": "stepOut"
+    };
+    const request = requests[action];
+    if (!request) {
+      throw Object.assign(new Error(`unsupported execution action: ${action}`), { statusCode: 400 });
+    }
+    const threadId = await this.resolveThreadId(session, body);
+    const result = await session.customRequest(request, { threadId });
+    return { action, threadId, result: result ?? {}, session: this.debugSessionRecord(session) };
+  }
+
+  private async stackTrace(body: JsonObject): Promise<JsonObject> {
+    const session = this.requireSession(body);
+    const threadId = await this.resolveThreadId(session, body);
+    const response = asObject(await session.customRequest("stackTrace", {
+      threadId,
+      startFrame: numberBodyField(body, "startFrame"),
+      levels: numberBodyField(body, "levels")
+    })) ?? {};
+    return { session: this.debugSessionRecord(session), threadId, ...response };
+  }
+
+  private async locals(body: JsonObject): Promise<JsonObject> {
+    const session = this.requireSession(body);
+    const frame = await this.resolveFrame(session, body);
+    const response = asObject(await session.customRequest("scopes", { frameId: numberField(frame.id) })) ?? {};
+    const scopes = arrayField(response, "scopes").map(asObject).filter((scope): scope is JsonObject => scope !== undefined);
+    const localScopes = scopes.filter((scope) => stringField(scope.presentationHint) === "locals" || stringField(scope.name)?.toLowerCase() === "locals");
+    const selected = localScopes.length > 0 ? localScopes : scopes.filter((scope) => scope.expensive !== true);
+    const populated = await Promise.all(selected.map(async (scope) => {
+      const variablesReference = numberField(scope.variablesReference);
+      const variables = variablesReference && variablesReference > 0
+        ? asObject(await session.customRequest("variables", { variablesReference }))
+        : undefined;
+      return { ...scope, variables: arrayField(variables, "variables") };
+    }));
+    return { session: this.debugSessionRecord(session), frame, scopes: populated };
+  }
+
+  private async variables(body: JsonObject): Promise<JsonObject> {
+    const session = this.requireSession(body);
+    const variablesReference = requiredPositiveInteger(body, "variablesReference");
+    const response = asObject(await session.customRequest("variables", {
+      variablesReference,
+      filter: stringBodyField(body, "filter"),
+      start: numberBodyField(body, "start"),
+      count: numberBodyField(body, "count")
+    })) ?? {};
+    return { session: this.debugSessionRecord(session), variablesReference, ...response };
+  }
+
+  private async evaluate(body: JsonObject): Promise<JsonObject> {
+    const session = this.requireSession(body);
+    const expression = requiredString(body, "expression");
+    let frameId = numberBodyField(body, "frameId");
+    if (frameId === undefined && this.sessionStates.get(session.id)?.status === "paused") {
+      frameId = numberField((await this.resolveFrame(session, body)).id);
+    }
+    const response = asObject(await session.customRequest("evaluate", {
+      expression,
+      frameId,
+      context: stringBodyField(body, "context") ?? "repl"
+    })) ?? {};
+    return { session: this.debugSessionRecord(session), expression, frameId, ...response };
+  }
+
+  private async threads(body: JsonObject): Promise<JsonObject> {
+    const session = this.requireSession(body);
+    const response = asObject(await session.customRequest("threads")) ?? {};
+    return { session: this.debugSessionRecord(session), ...response };
+  }
+
+  private async exceptionInfo(body: JsonObject): Promise<JsonObject> {
+    const session = this.requireSession(body);
+    const threadId = await this.resolveThreadId(session, body);
+    const response = asObject(await session.customRequest("exceptionInfo", { threadId })) ?? {};
+    return { session: this.debugSessionRecord(session), threadId, ...response };
+  }
+
+  private recentOutput(body: JsonObject): JsonObject {
+    const sessionId = this.resolveOutputSessionId(body);
+    const tail = numberBodyField(body, "tail") ?? 100;
+    if (!Number.isInteger(tail) || tail < 0) {
+      throw Object.assign(new Error("tail must be a non-negative integer"), { statusCode: 400 });
+    }
+    const records = this.outputBySession.get(sessionId) ?? [];
+    const output = tail === 0 ? [] : records.slice(-tail);
+    return { sessionId, count: output.length, totalCaptured: records.length, output };
+  }
+
+  private requireSession(body: JsonObject): vscode.DebugSession {
+    const session = this.findSession(body);
+    if (!session) {
+      throw Object.assign(new Error("debug session not found"), { statusCode: 404 });
+    }
+    return session;
+  }
+
+  private async resolveThreadId(session: vscode.DebugSession, body: JsonObject): Promise<number> {
+    const requested = numberBodyField(body, "threadId");
+    const active = this.sessionStates.get(session.id)?.activeThreadId;
+    if (requested !== undefined) {
+      return requested;
+    }
+    if (active !== undefined) {
+      return active;
+    }
+    const response = asObject(await session.customRequest("threads"));
+    const first = asObject(arrayField(response, "threads")[0]);
+    const threadId = numberField(first?.id);
+    if (threadId === undefined) {
+      throw Object.assign(new Error("debug adapter did not report a thread"), { statusCode: 409 });
+    }
+    return threadId;
+  }
+
+  private async resolveFrame(session: vscode.DebugSession, body: JsonObject): Promise<JsonObject> {
+    const frameId = numberBodyField(body, "frameId");
+    if (frameId !== undefined) {
+      return { id: frameId };
+    }
+    const threadId = await this.resolveThreadId(session, body);
+    const response = asObject(await session.customRequest("stackTrace", { threadId, startFrame: 0, levels: 1 }));
+    const frame = asObject(arrayField(response, "stackFrames")[0]);
+    if (!frame || numberField(frame.id) === undefined) {
+      throw Object.assign(new Error("debug adapter did not report a stack frame"), { statusCode: 409 });
+    }
+    return frame;
+  }
+
+  private resolveOutputSessionId(body: JsonObject): string {
+    const selector = stringBodyField(body, "sessionId") ?? stringBodyField(body, "session") ?? stringBodyField(body, "sessionName");
+    if (selector) {
+      const live = this.sessions.get(selector) ?? [...this.sessions.values()].find((session) => session.name === selector);
+      if (live) {
+        return live.id;
+      }
+      if (this.outputBySession.has(selector) || this.terminatedSessions.has(selector)) {
+        return selector;
+      }
+      const terminated = [...this.terminatedSessions.entries()].reverse().find(([, record]) => record.name === selector);
+      if (terminated) {
+        return terminated[0];
+      }
+      throw Object.assign(new Error("debug session not found"), { statusCode: 404 });
+    }
+    const active = vscode.debug.activeDebugSession;
+    if (active) {
+      return active.id;
+    }
+    const latest = [...this.outputBySession.entries()].reduce<{ id: string; sequence: number } | undefined>((current, [id, records]) => {
+      const sequence = records.at(-1)?.sequence ?? -1;
+      return !current || sequence > current.sequence ? { id, sequence } : current;
+    }, undefined)?.id ?? [...this.terminatedSessions.keys()].at(-1);
+    if (latest) {
+      return latest;
+    }
+    throw Object.assign(new Error("debug session not found"), { statusCode: 404 });
   }
 
   private findSession(body: JsonObject): vscode.DebugSession | undefined {
@@ -329,19 +759,6 @@ function findWorkspaceFolder(folderUri: string | undefined): vscode.WorkspaceFol
   }
 
   return folder;
-}
-
-function debugSessionRecord(session: vscode.DebugSession | undefined): JsonObject | undefined {
-  if (!session) {
-    return undefined;
-  }
-
-  return {
-    id: session.id,
-    name: session.name,
-    type: session.type,
-    workspaceFolder: session.workspaceFolder?.uri.toString()
-  };
 }
 
 async function readJsonBody(request: http.IncomingMessage): Promise<JsonObject> {
@@ -427,6 +844,96 @@ function booleanBodyField(body: JsonObject, key: string): boolean | undefined {
 function numberBodyField(body: JsonObject, key: string): number | undefined {
   const value = body[key];
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function requiredString(body: JsonObject, key: string): string {
+  const value = stringBodyField(body, key);
+  if (!value) {
+    throw Object.assign(new Error(`${key} is required`), { statusCode: 400 });
+  }
+  return value;
+}
+
+function requiredPositiveInteger(body: JsonObject, key: string): number {
+  const value = numberBodyField(body, key);
+  if (!Number.isInteger(value) || value === undefined || value <= 0) {
+    throw Object.assign(new Error(`${key} must be a positive integer`), { statusCode: 400 });
+  }
+  return value;
+}
+
+function asObject(value: unknown): JsonObject | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as JsonObject : undefined;
+}
+
+function arrayField(object: JsonObject | undefined, key: string): unknown[] {
+  const value = object?.[key];
+  return Array.isArray(value) ? value : [];
+}
+
+function numberField(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function booleanField(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function breakpointRecord(breakpoint: vscode.Breakpoint): JsonObject {
+  const base: JsonObject = {
+    id: breakpoint.id,
+    enabled: breakpoint.enabled,
+    condition: breakpoint.condition,
+    hitCondition: breakpoint.hitCondition,
+    logMessage: breakpoint.logMessage
+  };
+
+  if (breakpoint instanceof vscode.SourceBreakpoint) {
+    return {
+      ...base,
+      kind: "source",
+      uri: breakpoint.location.uri.toString(),
+      file: breakpoint.location.uri.fsPath,
+      line: breakpoint.location.range.start.line + 1,
+      column: breakpoint.location.range.start.character + 1
+    };
+  }
+
+  if (breakpoint instanceof vscode.FunctionBreakpoint) {
+    return { ...base, kind: "function", functionName: breakpoint.functionName };
+  }
+
+  return { ...base, kind: "unknown" };
+}
+
+function normalizeFilePath(file: string): string {
+  return process.platform === "win32" ? file.toLowerCase() : file;
+}
+
+function sourceLocation(frame: JsonObject | undefined): DebugSourceLocation | undefined {
+  if (!frame) {
+    return undefined;
+  }
+  const source = asObject(frame.source);
+  const line = numberField(frame.line);
+  const name = stringField(source?.name);
+  const path = stringField(source?.path);
+  const sourceReference = positiveNumberField(source?.sourceReference);
+  if (line === undefined || line <= 0 || (!name && !path && sourceReference === undefined)) {
+    return undefined;
+  }
+  return {
+    name,
+    path,
+    sourceReference,
+    line,
+    column: positiveNumberField(frame.column)
+  };
+}
+
+function positiveNumberField(value: unknown): number | undefined {
+  const number = numberField(value);
+  return number !== undefined && number > 0 ? number : undefined;
 }
 
 async function sleep(ms: number): Promise<void> {

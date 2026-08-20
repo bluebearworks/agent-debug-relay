@@ -1,8 +1,8 @@
 {
   "name": "agent-debug-relay",
   "displayName": "Agent Debug Relay",
-  "description": "Allow local agents to discover running VS Code windows and start workspace debug profiles.",
-  "version": "0.1.4",
+  "description": "Allow local agents to discover VS Code windows and control and inspect debug sessions.",
+  "version": "0.2.0",
   "publisher": "bluebearworks",
   "license": "MIT",
   "repository": {
@@ -74,6 +74,7 @@
     "build": "tsc -p .",
     "compile": "tsc -p .",
     "package": "vsce package --no-dependencies",
+    "test": "npm run build && node --test",
     "watch": "tsc -watch -p ."
   },
   "devDependencies": {

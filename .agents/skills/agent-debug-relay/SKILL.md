@@ -1,11 +1,11 @@
 ---
 name: agent-debug-relay
-description: Start, stop, restart, and inspect VS Code debug sessions through the Agent Debug Relay CLI and VS Code extension (bluebearworks.agent-debug-relay). Use this to launch a debug profile, cycle a session after a code change or rebuild, check whether a session is active, discover available launch profiles in a workspace or multi-root solution, or control VS Code debug state without touching the UI.
+description: Start, stop, restart, control, and inspect VS Code debug sessions through the Agent Debug Relay CLI and VS Code extension (bluebearworks.agent-debug-relay). Use this to launch a debug profile, manage breakpoints, pause or step execution, inspect stacks and variables, evaluate expressions, read debug output, or check session state without touching the UI.
 ---
 
 # Agent Debug Relay
 
-Use this skill to start, stop, and inspect VS Code debug sessions from an agent.
+Use this skill to control and inspect VS Code debug sessions from an agent.
 Use the CLI as the sole source of truth. Do not scan `launch.json`, `.csproj`, `.sln`, or `launchSettings.json` files directly.
 
 ## Setup
@@ -74,6 +74,22 @@ No rebuild needed:
 ```powershell
 agent-debug-relay restart "<profile name>" --workspace <repo-path> --json
 ```
+
+5. Interact with a running debugger.
+
+```powershell
+agent-debug-relay breakpoint add <file>:<line> --workspace <repo-path> --json
+agent-debug-relay breakpoint add <file>:<line> --condition "<expression>" --workspace <repo-path> --json
+agent-debug-relay pause --workspace <repo-path> --json
+agent-debug-relay stack --workspace <repo-path> --json
+agent-debug-relay locals --workspace <repo-path> --json
+agent-debug-relay variables <variablesReference> --workspace <repo-path> --json
+agent-debug-relay eval "<expression>" --workspace <repo-path> --json
+agent-debug-relay continue --workspace <repo-path> --json
+agent-debug-relay output --tail 50 --workspace <repo-path> --json
+```
+
+Use `threads`, `--thread-id`, `--frame-id`, and `--session` when the active stopped context is not the intended target. Treat `eval` as potentially side-effectful because the debug adapter evaluates the supplied expression in the target process.
 
 ## Troubleshooting
 

@@ -39,6 +39,24 @@ export type InstanceRecord = {
   updatedAt: string;
 };
 
+export type DebugSourceLocation = {
+  name?: string;
+  path?: string;
+  sourceReference?: number;
+  line: number;
+  column?: number;
+};
+
+export type DebugSessionState = {
+  status: "running" | "paused" | "terminated";
+  stopReason?: string;
+  stopDescription?: string;
+  activeThreadId?: number;
+  allThreadsStopped?: boolean;
+  location?: DebugSourceLocation;
+  lastEventAt: string;
+};
+
 export type LaunchProfileRecord = {
   kind: "configuration" | "compound" | "dotnetLaunchSettings";
   name: string;

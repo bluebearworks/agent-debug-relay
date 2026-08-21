@@ -100,14 +100,17 @@ Expression evaluation is potentially side-effectful. The selected debugger evalu
 ```powershell
 agent-debug-relay terminal list --workspace C:\path\to\repo --json
 agent-debug-relay terminal run "npm start" --name "dev server" --cwd C:\path\to\repo --workspace C:\path\to\repo --json
+agent-debug-relay terminal run "npm test" --wait --wait-ms 120000 --workspace C:\path\to\repo --json
 agent-debug-relay terminal output terminal-1 --tail 50 --workspace C:\path\to\repo --json
 agent-debug-relay terminal input "r" --terminal terminal-1 --no-enter --workspace C:\path\to\repo --json
+agent-debug-relay terminal interrupt terminal-1 --workspace C:\path\to\repo --json
+agent-debug-relay terminal wait terminal-1 --wait-ms 30000 --workspace C:\path\to\repo --json
 agent-debug-relay terminal stop terminal-1 --workspace C:\path\to\repo --json
 ```
 
-`terminal run` creates and reveals a normal VS Code integrated terminal when no terminal selector is supplied. Pass `--terminal`, `--terminal-id`, or `--terminal-name` to run in an existing terminal. `terminal input` appends Enter by default; use `--no-enter` for interactive input. `terminal stop` disposes the selected terminal and its shell process, matching VS Code's terminal trash action.
+`terminal run` creates and reveals a normal VS Code integrated terminal when no terminal selector is supplied. Pass `--terminal`, `--terminal-id`, or `--terminal-name` to run in an existing terminal. Add `--wait` to wait for that command's shell execution to finish. `terminal wait` waits for an already-running command, and returns `completed: false` if the timeout expires. `terminal input` appends Enter by default; use `--no-enter` for interactive input. `terminal interrupt` sends Ctrl+C while leaving the integrated terminal open. `terminal stop` disposes the selected terminal and its shell process, matching VS Code's terminal trash action.
 
-VS Code shell integration provides command state, exit codes, and output capture. When shell integration is unavailable, the relay runs the command with `Terminal.sendText`; the terminal remains visible and controllable, while command output and exit state are unavailable to the relay. Captured output starts when the extension observes a command execution and does not include earlier terminal scrollback.
+VS Code shell integration provides command state, exit codes, output capture, and terminal waiting. When shell integration is unavailable, the relay runs the command with `Terminal.sendText`; the terminal remains visible, interruptible, and controllable, while command output, waiting, and exit state are unavailable to the relay. A `terminal run --wait` response identifies this case with `wait.unavailable` and still returns the terminal id. Captured output starts when the extension observes a command execution and does not include earlier terminal scrollback.
 
 ## Development
 
@@ -138,7 +141,7 @@ npm run package:extension
 Install the packaged VSIX:
 
 ```powershell
-code --install-extension .\packages\extension\agent-debug-relay-0.3.0.vsix --force
+code --install-extension .\packages\extension\agent-debug-relay-0.4.0.vsix --force
 ```
 
 ## Protocol
@@ -147,8 +150,8 @@ Each instance record includes:
 
 ```json
 {
-  "extensionVersion": "0.3.0",
-  "protocolVersion": 4,
+  "extensionVersion": "0.4.0",
+  "protocolVersion": 5,
   "capabilities": [
     "profiles",
     "profileLifecycleFields",
@@ -161,7 +164,8 @@ Each instance record includes:
     "inspection",
     "debugOutput",
     "sessionState",
-    "terminals"
+    "terminals",
+    "terminalExecutionLifecycle"
   ]
 }
 ```

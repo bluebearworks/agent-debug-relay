@@ -12,6 +12,8 @@ const OUTPUT_LIMIT = 1_000;
 const TERMINATED_SESSION_LIMIT = 20;
 const CLOSED_TERMINAL_LIMIT = 20;
 const SHELL_INTEGRATION_WAIT_MS = 3_000;
+const DEFAULT_TERMINAL_WAIT_MS = 15_000;
+const TERMINAL_POLL_MS = 50;
 
 type OutputRecord = JsonObject & {
   sequence: number;
@@ -47,6 +49,8 @@ export class AgentDebugServer {
   private readonly terminalStates = new Map<string, TerminalStateRecord>();
   private readonly terminalOutput = new Map<string, OutputRecord[]>();
   private readonly terminalExecutionIds = new WeakMap<vscode.TerminalShellExecution, string>();
+  private readonly currentTerminalExecutions = new Map<string, vscode.TerminalShellExecution>();
+  private readonly terminalExecutionExitCodes = new WeakMap<vscode.TerminalShellExecution, number | undefined>();
   private readonly closedTerminalIds: string[] = [];
   private terminalSequence = 0;
   private terminalOutputSequence = 0;
@@ -300,6 +304,16 @@ export class AgentDebugServer {
 
     if (url.pathname === "/terminals/input" && method === "POST") {
       writeJson(response, 200, await this.sendTerminalInput(await readJsonBody(request)));
+      return;
+    }
+
+    if (url.pathname === "/terminals/interrupt" && method === "POST") {
+      writeJson(response, 200, await this.interruptTerminal(await readJsonBody(request)));
+      return;
+    }
+
+    if (url.pathname === "/terminals/wait" && method === "POST") {
+      writeJson(response, 200, await this.waitForTerminal(await readJsonBody(request)));
       return;
     }
 
@@ -772,6 +786,7 @@ export class AgentDebugServer {
       this.closedTerminalIds.push(id);
     }
     this.terminals.delete(id);
+    this.currentTerminalExecutions.delete(id);
 
     while (this.closedTerminalIds.length > CLOSED_TERMINAL_LIMIT) {
       const oldestId = this.closedTerminalIds.shift();
@@ -790,6 +805,7 @@ export class AgentDebugServer {
     const now = new Date().toISOString();
     const current = this.terminalStates.get(id);
     this.terminalExecutionIds.set(execution, id);
+    this.currentTerminalExecutions.set(id, execution);
     this.terminalStates.set(id, {
       ...(current ?? {
         id,
@@ -842,6 +858,11 @@ export class AgentDebugServer {
     exitCode: number | undefined
   ): void {
     const id = this.terminalExecutionIds.get(execution) ?? this.trackTerminal(terminal, false);
+    this.terminalExecutionExitCodes.set(execution, exitCode);
+    if (this.currentTerminalExecutions.get(id) !== execution) {
+      return;
+    }
+    this.currentTerminalExecutions.delete(id);
     const current = this.terminalStates.get(id);
     if (!current || current.status === "closed") {
       return;
@@ -891,9 +912,12 @@ export class AgentDebugServer {
     const command = requiredString(body, "command");
     const selector = terminalSelector(body);
     const cwd = stringBodyField(body, "cwd");
+    const shouldWait = booleanBodyField(body, "wait") ?? false;
+    const waitMs = shouldWait ? terminalWaitMs(body) : undefined;
     let terminal: vscode.Terminal;
     let id: string;
     let created = false;
+    let execution: vscode.TerminalShellExecution | undefined;
 
     if (selector) {
       ({ id, terminal } = this.requireTerminal(body));
@@ -910,7 +934,8 @@ export class AgentDebugServer {
     const shellIntegration = await this.waitForShellIntegration(terminal, SHELL_INTEGRATION_WAIT_MS);
     const now = new Date().toISOString();
     if (shellIntegration) {
-      shellIntegration.executeCommand(command);
+      execution = shellIntegration.executeCommand(command);
+      this.trackTerminalExecution(terminal, execution);
       const current = this.terminalStates.get(id);
       this.terminalStates.set(id, {
         ...(current ?? {
@@ -950,12 +975,27 @@ export class AgentDebugServer {
       });
     }
 
-    return {
+    const result: JsonObject = {
       started: true,
       created,
       outputCapture: shellIntegration !== undefined,
       terminal: await this.terminalRecord(id, terminal)
     };
+
+    if (shouldWait) {
+      result.wait = execution
+        ? await this.waitForTerminal({ terminalId: id, waitMs }, execution)
+        : {
+            completed: false,
+            unavailable: true,
+            reason: "shellIntegrationUnavailable",
+            waitMs,
+            elapsedMs: 0,
+            terminal: await this.terminalRecord(id, terminal)
+          };
+    }
+
+    return result;
   }
 
   private async sendTerminalInput(body: JsonObject): Promise<JsonObject> {
@@ -964,6 +1004,59 @@ export class AgentDebugServer {
     const addNewLine = booleanBodyField(body, "addNewLine") ?? true;
     terminal.sendText(input, addNewLine);
     return { sent: true, input, addNewLine, terminal: await this.terminalRecord(id, terminal) };
+  }
+
+  private async interruptTerminal(body: JsonObject): Promise<JsonObject> {
+    const { id, terminal } = this.requireTerminal(body);
+    terminal.sendText("\x03", false);
+    return { interrupted: true, terminal: await this.terminalRecord(id, terminal) };
+  }
+
+  private async waitForTerminal(
+    body: JsonObject,
+    requestedExecution?: vscode.TerminalShellExecution
+  ): Promise<JsonObject> {
+    const id = this.resolveTerminalId(body, true);
+    const waitMs = terminalWaitMs(body);
+
+    const initial = this.terminalStates.get(id);
+    if (!initial) {
+      throw Object.assign(new Error(`terminal not found: ${id}`), { statusCode: 404 });
+    }
+    if (initial.status === "unknown") {
+      throw Object.assign(new Error("terminal completion cannot be observed without VS Code shell integration"), { statusCode: 409 });
+    }
+
+    let execution = requestedExecution ?? this.currentTerminalExecutions.get(id);
+    const startedAt = Date.now();
+    const deadline = startedAt + waitMs;
+    while (Date.now() < deadline) {
+      const state = this.terminalStates.get(id);
+      if (state?.status === "closed" || (execution && this.terminalExecutionExitCodes.has(execution))) {
+        break;
+      }
+      if (!execution) {
+        execution = this.currentTerminalExecutions.get(id);
+        if (!execution && state?.status !== "running") {
+          break;
+        }
+      }
+      await sleep(TERMINAL_POLL_MS);
+    }
+
+    const state = this.terminalStates.get(id);
+    const completed = state?.status === "closed"
+      || (execution ? this.terminalExecutionExitCodes.has(execution) : state?.status !== "running");
+    return {
+      completed,
+      waitMs,
+      elapsedMs: Date.now() - startedAt,
+      execution: execution ? {
+        command: execution.commandLine.value,
+        exitCode: this.terminalExecutionExitCodes.get(execution)
+      } : undefined,
+      terminal: await this.terminalResultRecord(id)
+    };
   }
 
   private async stopTerminal(body: JsonObject): Promise<JsonObject> {
@@ -989,6 +1082,15 @@ export class AgentDebugServer {
       totalCaptured: records.length,
       output
     };
+  }
+
+  private async terminalResultRecord(id: string): Promise<JsonObject | undefined> {
+    const terminal = this.terminals.get(id);
+    if (terminal) {
+      return this.terminalRecord(id, terminal);
+    }
+    const state = this.terminalStates.get(id);
+    return state ? { ...state, active: false, outputCaptured: this.terminalOutput.get(id)?.length ?? 0 } : undefined;
   }
 
   private requireTerminal(body: JsonObject): { id: string; terminal: vscode.Terminal } {
@@ -1244,6 +1346,14 @@ function terminalSelector(body: JsonObject): string | undefined {
 function numberBodyField(body: JsonObject, key: string): number | undefined {
   const value = body[key];
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function terminalWaitMs(body: JsonObject): number {
+  const waitMs = numberBodyField(body, "waitMs") ?? DEFAULT_TERMINAL_WAIT_MS;
+  if (!Number.isInteger(waitMs) || waitMs < 0) {
+    throw Object.assign(new Error("waitMs must be a non-negative integer"), { statusCode: 400 });
+  }
+  return waitMs;
 }
 
 function requiredString(body: JsonObject, key: string): string {

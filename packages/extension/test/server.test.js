@@ -266,7 +266,7 @@ test("selects the newest matching run and the session with the latest output", a
   assert.equal(server.resolveOutputSessionId({}), first.id);
 });
 
-test("runs, captures, writes to, lists, and stops a visible integrated terminal", async () => {
+test("runs, captures, writes to, interrupts, waits for, lists, and stops a visible integrated terminal", async () => {
   const server = createServer();
   const started = await server.runTerminalCommand({
     command: "npm start",
@@ -295,9 +295,23 @@ test("runs, captures, writes to, lists, and stops a visible integrated terminal"
   assert.equal(input.sent, true);
   assert.deepEqual(terminal.sentText, [{ text: "r", addNewLine: false }]);
 
+  const interrupted = await server.interruptTerminal({ terminalId: started.terminal.id });
+  assert.equal(interrupted.interrupted, true);
+  assert.deepEqual(terminal.sentText.at(-1), { text: "\x03", addNewLine: false });
+
+  setTimeout(() => fireTerminalEvent("end", {
+    terminal,
+    execution: terminal.executions[0],
+    exitCode: 130
+  }), 10);
+  const waited = await server.waitForTerminal({ terminalId: started.terminal.id, waitMs: 1000 });
+  assert.equal(waited.completed, true);
+  assert.equal(waited.terminal.status, "exited");
+  assert.equal(waited.terminal.exitCode, 130);
+
   const listed = await server.terminalRecords();
   assert.equal(listed.activeTerminalId, started.terminal.id);
-  assert.equal(listed.terminals[0].status, "running");
+  assert.equal(listed.terminals[0].status, "exited");
   assert.equal(listed.terminals[0].managed, true);
 
   const stopped = await server.stopTerminal({ terminalId: started.terminal.id });
@@ -305,6 +319,57 @@ test("runs, captures, writes to, lists, and stops a visible integrated terminal"
   assert.equal(terminal.disposed, true);
   assert.equal(server.terminals.size, 0);
   assert.equal(server.terminalStates.get(started.terminal.id).status, "closed");
+});
+
+test("run can wait for completion and terminal wait reports a timeout without closing the terminal", async () => {
+  const server = createServer();
+  const running = server.runTerminalCommand({ command: "npm test", wait: true, waitMs: 1000 });
+  await new Promise((resolve) => setImmediate(resolve));
+  const terminal = vscode.window.terminals[0];
+  fireTerminalEvent("end", { terminal, execution: terminal.executions[0], exitCode: 0 });
+
+  const result = await running;
+  assert.equal(result.wait.completed, true);
+  assert.equal(result.wait.terminal.exitCode, 0);
+
+  terminal.shellIntegration.executeCommand("npm run watch");
+  await new Promise((resolve) => setImmediate(resolve));
+  const timedOut = await server.waitForTerminal({ terminalId: result.terminal.id, waitMs: 0 });
+  assert.equal(timedOut.completed, false);
+  assert.equal(timedOut.terminal.status, "running");
+  assert.equal(terminal.disposed, false);
+});
+
+test("wait follows the requested shell execution when a stale command ends later", async () => {
+  const server = createServer();
+  const first = await server.runTerminalCommand({ command: "first" });
+  const terminal = vscode.window.terminals[0];
+  const firstExecution = terminal.executions[0];
+
+  let settled = false;
+  const secondRun = server.runTerminalCommand({
+    terminalId: first.terminal.id,
+    command: "second",
+    wait: true,
+    waitMs: 1000
+  }).then((result) => {
+    settled = true;
+    return result;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  const secondExecution = terminal.executions[1];
+
+  fireTerminalEvent("end", { terminal, execution: firstExecution, exitCode: 9 });
+  await new Promise((resolve) => setTimeout(resolve, 75));
+  assert.equal(settled, false);
+  assert.equal(server.terminalStates.get(first.terminal.id).status, "running");
+
+  fireTerminalEvent("end", { terminal, execution: secondExecution, exitCode: 0 });
+  const result = await secondRun;
+  assert.equal(result.wait.completed, true);
+  assert.equal(result.wait.execution.command, "second");
+  assert.equal(result.wait.execution.exitCode, 0);
+  assert.equal(result.wait.terminal.exitCode, 0);
 });
 
 test("falls back to sendText and reports unknown execution state without shell integration", async () => {
@@ -326,6 +391,18 @@ test("falls back to sendText and reports unknown execution state without shell i
     assert.equal(started.outputCapture, false);
     assert.equal(started.terminal.status, "unknown");
     assert.deepEqual(terminal.sentText, [{ text: "npm start", addNewLine: true }]);
+
+    const waited = await server.runTerminalCommand({
+      command: "npm test",
+      terminalId: started.terminal.id,
+      wait: true,
+      waitMs: 1000
+    });
+    assert.equal(waited.wait.completed, false);
+    assert.equal(waited.wait.unavailable, true);
+    assert.equal(waited.wait.reason, "shellIntegrationUnavailable");
+    assert.equal(waited.wait.terminal.id, started.terminal.id);
+    assert.deepEqual(terminal.sentText.at(-1), { text: "npm test", addNewLine: true });
   } finally {
     vscode.window.createTerminal = originalCreateTerminal;
   }
@@ -349,6 +426,7 @@ function createTerminal(name = "PowerShell", cwd = "C:\\repo") {
     name,
     processId: Promise.resolve(4321),
     commands: [],
+    executions: [],
     sentText: [],
     shown: false,
     disposed: false,
@@ -364,6 +442,7 @@ function createTerminal(name = "PowerShell", cwd = "C:\\repo") {
             yield "ready\r\n";
           }
         };
+        terminal.executions.push(execution);
         queueMicrotask(() => fireTerminalEvent("start", { terminal, execution }));
         return execution;
       }

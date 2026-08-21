@@ -96,12 +96,15 @@ Use `threads`, `--thread-id`, `--frame-id`, and `--session` when the active stop
 ```powershell
 agent-debug-relay terminal list --workspace <repo-path> --json
 agent-debug-relay terminal run "npm start" --name "dev server" --workspace <repo-path> --json
+agent-debug-relay terminal run "npm test" --wait --wait-ms 120000 --workspace <repo-path> --json
 agent-debug-relay terminal output <terminal-id> --tail 50 --workspace <repo-path> --json
 agent-debug-relay terminal input "r" --terminal <terminal-id> --no-enter --workspace <repo-path> --json
+agent-debug-relay terminal interrupt <terminal-id> --workspace <repo-path> --json
+agent-debug-relay terminal wait <terminal-id> --wait-ms 30000 --workspace <repo-path> --json
 agent-debug-relay terminal stop <terminal-id> --workspace <repo-path> --json
 ```
 
-`terminal run` creates a visible VS Code terminal when `--terminal`, `--terminal-id`, and `--terminal-name` are omitted. Reuse the returned terminal id for output, input, and stop. Shell integration enables captured output and exit state; check `outputCapture` in the run response. Terminal commands execute in the user's shell and can have side effects.
+`terminal run` creates a visible VS Code terminal when `--terminal`, `--terminal-id`, and `--terminal-name` are omitted. Reuse the returned terminal id for output, input, interrupt, wait, and stop. Use `--wait` for finite commands; `terminal wait` can wait on a command started earlier. `terminal interrupt` sends Ctrl+C without closing the terminal, while `terminal stop` closes it. Shell integration enables captured output, waiting, and exit state; check `outputCapture` in the run response. Without shell integration, `terminal run --wait` still returns the terminal id and sets `wait.unavailable`. Terminal commands execute in the user's shell and can have side effects.
 
 ## Troubleshooting
 

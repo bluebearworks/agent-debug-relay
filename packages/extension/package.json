@@ -2,7 +2,7 @@
   "name": "agent-debug-relay",
   "displayName": "Agent Debug Relay",
   "description": "Allow local agents to control VS Code debug sessions and integrated terminals.",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publisher": "bluebearworks",
   "license": "MIT",
   "repository": {

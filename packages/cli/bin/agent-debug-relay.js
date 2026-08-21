@@ -54,6 +54,12 @@ async function main() {
 
   const selected = selectInstance(instances, options);
   ensureCompatible(selected.record, COMMAND_CAPABILITIES[command] || []);
+  if (command === "terminal") {
+    const action = positional[0];
+    if (action === "interrupt" || action === "wait" || (action === "run" && options.wait)) {
+      ensureCompatible(selected.record, ["terminalExecutionLifecycle"]);
+    }
+  }
 
   if (command === "status") {
     const capabilities = Array.isArray(selected.record.capabilities) ? selected.record.capabilities : [];
@@ -265,7 +271,9 @@ async function main() {
         ...terminalOptions(options),
         command: terminalCommand,
         name: options.name,
-        cwd: options.cwd ? path.resolve(options.cwd) : undefined
+        cwd: options.cwd ? path.resolve(options.cwd) : undefined,
+        wait: options.wait ? true : undefined,
+        waitMs: options.wait ? integerOption(options.waitMs, "wait-ms") : undefined
       }));
       return;
     }
@@ -292,6 +300,25 @@ async function main() {
       return;
     }
 
+    if (action === "interrupt") {
+      const terminal = positional.slice(1).join(" ").trim() || options.terminal;
+      output(options, await requestJson(selected.record, "POST", "/terminals/interrupt", {
+        ...terminalOptions(options),
+        terminal: terminal || undefined
+      }));
+      return;
+    }
+
+    if (action === "wait") {
+      const terminal = positional.slice(1).join(" ").trim() || options.terminal;
+      output(options, await requestJson(selected.record, "POST", "/terminals/wait", {
+        ...terminalOptions(options),
+        terminal: terminal || undefined,
+        waitMs: integerOption(options.waitMs, "wait-ms")
+      }));
+      return;
+    }
+
     if (action === "output") {
       const terminal = positional.slice(1).join(" ").trim() || options.terminal;
       const tail = options.tail ?? options.count;
@@ -303,7 +330,7 @@ async function main() {
       return;
     }
 
-    throw new Error("terminal action must be list, run, input, output, or stop");
+    throw new Error("terminal action must be list, run, input, interrupt, wait, output, or stop");
   }
 
   throw new Error(`unknown command: ${command}`);
@@ -322,7 +349,7 @@ function parseArgs(args) {
       const normalized = key.replace(/-([a-z])/g, (_, char) => char.toUpperCase());
       const next = args[index + 1];
 
-      if (["json", "help", "no-debug", "all", "no-enter"].includes(key)) {
+      if (["json", "help", "no-debug", "all", "no-enter", "wait"].includes(key)) {
         options[normalized] = true;
       } else {
         if (!next) {
@@ -664,8 +691,10 @@ Usage:
   agent-debug-relay exception [--thread-id <id>] [debug options] [--json]
   agent-debug-relay output [--tail <count>|--count <count>] [debug options] [--json]
   agent-debug-relay terminal list [target options] [--json]
-  agent-debug-relay terminal run <command> [--name <name>] [--cwd <path>] [--terminal <id or name>] [target options] [--json]
+  agent-debug-relay terminal run <command> [--name <name>] [--cwd <path>] [--terminal <id or name>] [--wait] [--wait-ms <ms>] [target options] [--json]
   agent-debug-relay terminal input <text> [--terminal <id or name>] [--no-enter] [target options] [--json]
+  agent-debug-relay terminal interrupt [id or name] [target options] [--json]
+  agent-debug-relay terminal wait [id or name] [--wait-ms <ms>] [target options] [--json]
   agent-debug-relay terminal output [id or name] [--tail <count>|--count <count>] [target options] [--json]
   agent-debug-relay terminal stop [id or name] [target options] [--json]
   agent-debug-relay status [--workspace <path>] [--instance <id>] [--json]
@@ -683,12 +712,13 @@ Options:
   --name <name>            Name a terminal created by terminal run.
   --cwd <path>             Set the working directory for a created terminal.
   --no-enter               Send terminal input without appending Enter.
+  --wait                   Wait for a terminal run command to finish.
   --thread-id <id>         Select a debugger thread; defaults to the stopped or first thread.
   --frame-id <id>          Select a stack frame; defaults to the top frame.
   --tail <count>           Return the newest captured debug output entries. Defaults to 100.
   --count <count>          Alias for --tail on the output command.
   --all                   Stop all debug sessions in the selected VS Code window.
-  --wait-ms <ms>           Wait this long for stopped sessions to terminate. Defaults to 15000.
+  --wait-ms <ms>           Wait this long for debug termination or terminal completion. Defaults to 15000.
   --no-debug              Start without attaching a debugger.
   --registry-dir <path>   Read instance records from a custom registry directory.
   --json                  Print machine-readable JSON.

@@ -20,6 +20,8 @@ test("help documents the interactive debugger commands", async () => {
   assert.match(stdout, /variables <variablesReference>/);
   assert.match(stdout, /output \[--tail <count>\|--count <count>\]/);
   assert.match(stdout, /terminal run <command>/);
+  assert.match(stdout, /terminal interrupt \[id or name\]/);
+  assert.match(stdout, /terminal wait \[id or name\]/);
   assert.match(stdout, /terminal stop \[id or name\]/);
 });
 
@@ -89,15 +91,17 @@ test("status uses the authenticated session-state endpoint when advertised", asy
 });
 
 test("terminal commands preserve command text, selectors, cwd, input mode, and output tail", async (t) => {
-  const relay = await createRelay(t, ["terminals"]);
+  const relay = await createRelay(t, ["terminals", "terminalExecutionLifecycle"]);
   const started = await runJson([
-    "terminal", "run", "npm", "start", "--name", "dev server", "--cwd", "packages/cli", ...relay.targetArgs
+    "terminal", "run", "npm", "start", "--name", "dev server", "--cwd", "packages/cli", "--wait", "--wait-ms", "30000", ...relay.targetArgs
   ]);
   assert.equal(started.url, "/terminals/run");
   assert.deepEqual(started.body, {
     command: "npm start",
     name: "dev server",
-    cwd: path.resolve(repoPath, "packages/cli")
+    cwd: path.resolve(repoPath, "packages/cli"),
+    wait: true,
+    waitMs: 30000
   });
 
   const input = await runJson([
@@ -105,6 +109,14 @@ test("terminal commands preserve command text, selectors, cwd, input mode, and o
   ]);
   assert.equal(input.url, "/terminals/input");
   assert.deepEqual(input.body, { terminalId: "terminal-1", input: "r", addNewLine: false });
+
+  const interrupted = await runJson(["terminal", "interrupt", "terminal-1", ...relay.targetArgs]);
+  assert.equal(interrupted.url, "/terminals/interrupt");
+  assert.deepEqual(interrupted.body, { terminal: "terminal-1" });
+
+  const waited = await runJson(["terminal", "wait", "terminal-1", "--wait-ms", "5000", ...relay.targetArgs]);
+  assert.equal(waited.url, "/terminals/wait");
+  assert.deepEqual(waited.body, { terminal: "terminal-1", waitMs: 5000 });
 
   const output = await runJson([
     "terminal", "output", "terminal-1", "--tail", "25", ...relay.targetArgs
@@ -115,6 +127,30 @@ test("terminal commands preserve command text, selectors, cwd, input mode, and o
   const stopped = await runJson(["terminal", "stop", "terminal-1", ...relay.targetArgs]);
   assert.equal(stopped.url, "/terminals/stop");
   assert.deepEqual(stopped.body, { terminal: "terminal-1" });
+});
+
+test("terminal waits reject fractional timeouts before sending a command", async (t) => {
+  const relay = await createRelay(t, ["terminals", "terminalExecutionLifecycle"]);
+  await assert.rejects(
+    runText(["terminal", "run", "npm test", "--wait", "--wait-ms", "1.5", ...relay.targetArgs]),
+    /--wait-ms must be a non-negative integer/
+  );
+});
+
+test("new terminal lifecycle commands reject an older terminals-only extension", async (t) => {
+  const relay = await createRelay(t, ["terminals"]);
+  await assert.rejects(
+    runText(["terminal", "run", "npm test", "--wait", ...relay.targetArgs]),
+    /missing capabilities: terminalExecutionLifecycle/
+  );
+  await assert.rejects(
+    runText(["terminal", "interrupt", "terminal-1", ...relay.targetArgs]),
+    /missing capabilities: terminalExecutionLifecycle/
+  );
+
+  const compatible = await runJson(["terminal", "run", "npm test", ...relay.targetArgs]);
+  assert.equal(compatible.url, "/terminals/run");
+  assert.deepEqual(compatible.body, { command: "npm test" });
 });
 
 async function runJson(args) {

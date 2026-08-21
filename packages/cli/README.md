@@ -27,7 +27,10 @@ agent-debug-relay locals --workspace C:\path\to\repo --json
 agent-debug-relay eval "customer.Total" --workspace C:\path\to\repo --json
 agent-debug-relay output --tail 50 --workspace C:\path\to\repo --json
 agent-debug-relay terminal run "npm start" --name "dev server" --workspace C:\path\to\repo --json
+agent-debug-relay terminal run "npm test" --wait --wait-ms 120000 --workspace C:\path\to\repo --json
 agent-debug-relay terminal output terminal-1 --tail 50 --workspace C:\path\to\repo --json
+agent-debug-relay terminal interrupt terminal-1 --workspace C:\path\to\repo --json
+agent-debug-relay terminal wait terminal-1 --wait-ms 30000 --workspace C:\path\to\repo --json
 agent-debug-relay terminal stop terminal-1 --workspace C:\path\to\repo --json
 ```
 

@@ -18,6 +18,6 @@ The extension publishes an authenticated localhost endpoint for each VS Code win
 
 Breakpoint management uses VS Code's breakpoint API. Execution and inspection use standard DAP requests through the active `DebugSession`. Session responses track running, paused, and terminated state plus stop reason, thread, source location, and recent DAP output when supplied by the adapter.
 
-Integrated-terminal commands use VS Code's terminal API. Shell integration supplies streamed command output, exit codes, and execution state. Relay-created terminals are visible and remain ordinary VS Code terminals that can be interrupted or closed from the terminal UI.
+Integrated-terminal commands use VS Code's terminal API. Shell integration supplies streamed command output, exit codes, execution state, and completion waiting. Relay-created terminals are visible and remain ordinary VS Code terminals that agents can write to, interrupt, wait for, or close.
 
 Reload already-open VS Code windows after installing or upgrading the extension.

@@ -90,6 +90,18 @@ test("status uses the authenticated session-state endpoint when advertised", asy
   assert.match(text, /"sessions": \[\]/);
 });
 
+test("macOS signal restrictions allow discovery followed by an authenticated command", { skip: process.platform !== "darwin" }, async (t) => {
+  const relay = await createRelay(t, ["sessionState"]);
+  const { stdout, stderr } = await execFileAsync("/usr/bin/sandbox-exec", [
+    "-p", "(version 1)(allow default)(deny signal)",
+    process.execPath, cliPath, "status", "--json", ...relay.targetArgs
+  ]);
+  const status = JSON.parse(stdout);
+  assert.equal(status.url, "/status");
+  assert.equal(status.authorization, "Bearer test-token");
+  assert.match(stderr, /Permission denied checking relay process/);
+});
+
 test("terminal commands preserve command text, selectors, cwd, input mode, and output tail", async (t) => {
   const relay = await createRelay(t, ["terminals", "terminalExecutionLifecycle"]);
   const started = await runJson([

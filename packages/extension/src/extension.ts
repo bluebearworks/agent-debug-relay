@@ -1,16 +1,15 @@
 import * as crypto from "crypto";
 import * as fs from "fs/promises";
-import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
 import { CAPABILITIES, PROTOCOL_VERSION } from "./protocol";
 import { AgentDebugServer } from "./server";
+import { getRegistryDir } from "./registry";
 import { ActiveEditorRecord, InstanceRecord, WorkspaceFolderRecord } from "./types";
 
 const HEARTBEAT_MS = 5_000;
 const CONFIG_SECTION = "agentDebugRelay";
 const EXTENSION_ID = "bluebearworks.agent-debug-relay";
-const REGISTRY_NAMESPACE = "agent-debug-relay";
 
 let server: AgentDebugServer | undefined;
 let record: InstanceRecord | undefined;
@@ -38,7 +37,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   await server.start();
 
-  registryPath = path.join(getRegistryDir(), `${id}.json`);
+  registryPath = path.join(getRegistryDir(config.get<string>("registryDir", "")), `${id}.json`);
   record = buildRecord(id, host, server.port, token, registryPath, new Date().toISOString());
   await publishRecord();
 
@@ -100,9 +99,9 @@ async function publishRecord(): Promise<void> {
   }
 
   record = buildRecord(record.id, record.host, server.port, record.token, registryPath, record.createdAt);
-  await fs.mkdir(path.dirname(registryPath), { recursive: true });
+  await fs.mkdir(path.dirname(registryPath), { recursive: true, mode: 0o700 });
   const tempPath = `${registryPath}.${process.pid}.tmp`;
-  await fs.writeFile(tempPath, JSON.stringify(record, null, 2), "utf8");
+  await fs.writeFile(tempPath, JSON.stringify(record, null, 2), { encoding: "utf8", mode: 0o600 });
   await fs.rename(tempPath, registryPath);
 }
 
@@ -191,16 +190,6 @@ async function getOrCreateToken(context: vscode.ExtensionContext): Promise<strin
   const token = crypto.randomBytes(32).toString("hex");
   await context.globalState.update("agentDebugRelay.token", token);
   return token;
-}
-
-function getRegistryDir(): string {
-  const configured = vscode.workspace.getConfiguration(CONFIG_SECTION).get<string>("registryDir", "");
-
-  if (configured.trim().length > 0) {
-    return path.resolve(configured);
-  }
-
-  return path.join(os.tmpdir(), REGISTRY_NAMESPACE, "instances");
 }
 
 async function showStatus(): Promise<void> {

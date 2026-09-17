@@ -39,3 +39,11 @@ Run `agent-debug-relay --help` for debugger, terminal, output, and selection opt
 `eval` sends the expression to the selected debug adapter and can execute side effects, like evaluation in a debugger watch or immediate window.
 
 The CLI talks to authenticated localhost endpoints published by running VS Code windows with the Agent Debug Relay extension installed and enabled.
+
+## Discovery and sandbox permissions
+
+The default registry is `.agent-debug-relay/instances` in your home directory, shared with the extension. The CLI also searches its system temp directory for records from earlier extension versions. Update both packages and reload VS Code when upgrading.
+
+For a custom registry, pass `--registry-dir <absolute-directory>` (or `--registry-dir=<absolute-directory>`) or set `AGENT_DEBUG_RELAY_REGISTRY_DIR`. Configure the extension to use that same directory through its setting or environment. Flags take precedence over environment variables.
+
+Discovery diagnostics are written to stderr; `--json` results stay on stdout. If the sandbox denies a process-existence check, the CLI retains the record and reports the restriction. Commands require permission to read the registry and connect to the authenticated localhost endpoint. Use your agent's supported permission controls when access is denied.

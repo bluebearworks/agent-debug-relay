@@ -173,10 +173,18 @@ Each instance record includes:
 The default registry folder is:
 
 ```text
-%TEMP%\agent-debug-relay\instances
+~/.agent-debug-relay/instances
 ```
 
-Set `AGENT_DEBUG_RELAY_REGISTRY_DIR` for the CLI or `agentDebugRelay.registryDir` in VS Code when a custom location is useful.
+On Windows, `~` is your user profile directory. The shared home-directory location allows VS Code and agent shells to discover the same instances even when they use different temporary directories. The CLI also reads records from the system temp directories used by earlier extension versions.
+
+For a custom location, set `AGENT_DEBUG_RELAY_REGISTRY_DIR` in both processes, or set `agentDebugRelay.registryDir` in VS Code and pass `--registry-dir <directory>` to the CLI. The CLI also accepts `--registry-dir=<directory>`. The VS Code setting takes precedence over its environment; the CLI flag takes precedence over its environment. Use an absolute path for overrides. Reload the VS Code window after changing its setting. Environment changes require the VS Code process to inherit the new environment; launching `code` can reuse an already-running process.
+
+### Sandboxed agents
+
+Update both the extension and CLI, then reload the VS Code window. Run `agent-debug-relay instances --json` from the agent shell. Discovery diagnostics go to stderr and include the searched directories when no instances are found. The JSON result remains on stdout.
+
+The CLI retains records when the sandbox denies a process-existence check. Debugger and terminal commands authenticate to the selected localhost endpoint, so the agent also needs permission to read the registry and connect to that endpoint. A denied filesystem read is reported with its path and error code. Use the agent's supported permission controls to grant the required access.
 
 ## Debug Lifecycle
 

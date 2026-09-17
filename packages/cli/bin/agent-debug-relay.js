@@ -6,7 +6,8 @@ const http = require("http");
 const os = require("os");
 const path = require("path");
 
-const DEFAULT_REGISTRY_DIR = path.join(os.tmpdir(), "agent-debug-relay", "instances");
+const DEFAULT_REGISTRY_DIR = path.join(os.homedir(), ".agent-debug-relay", "instances");
+const TEMP_REGISTRY_DIR = path.join(os.tmpdir(), "agent-debug-relay", "instances");
 const LEGACY_REGISTRY_DIR = path.join(os.tmpdir(), "vscode-agent-debug", "instances");
 const REQUIRED_PROTOCOL_VERSION = 2;
 
@@ -31,10 +32,12 @@ const COMMAND_CAPABILITIES = {
   terminal: ["terminals"]
 };
 
-main().catch((error) => {
-  console.error(error.message || String(error));
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error.message || String(error));
+    process.exitCode = 1;
+  });
+}
 
 async function main() {
   const { command, positional, options } = parseArgs(process.argv.slice(2));
@@ -45,7 +48,12 @@ async function main() {
   }
 
   const registryDirs = registryDirectories(options);
-  const instances = registryDirs.flatMap((registryDir) => discoverInstances(registryDir)).filter((instance) => instance.live);
+  const discovered = registryDirs.flatMap((registryDir) => discoverInstances(registryDir)).filter((instance) => instance.live);
+  const instances = [...new Map(discovered.map((entry) => [entry.record.id, entry])).values()];
+
+  if (instances.length === 0) {
+    console.error(`No running relay instances found. Searched: ${registryDirs.join(", ")}. Check the extension's registryPath and use --registry-dir <directory> for a custom location.`);
+  }
 
   if (command === "instances") {
     output(options, instances.map((entry) => entry.record));
@@ -345,19 +353,23 @@ function parseArgs(args) {
     const arg = args[index];
 
     if (arg.startsWith("--")) {
-      const key = arg.slice(2);
+      const separator = arg.indexOf("=");
+      const key = arg.slice(2, separator === -1 ? undefined : separator);
       const normalized = key.replace(/-([a-z])/g, (_, char) => char.toUpperCase());
-      const next = args[index + 1];
+      const next = separator === -1 ? args[index + 1] : arg.slice(separator + 1);
 
       if (["json", "help", "no-debug", "all", "no-enter", "wait"].includes(key)) {
+        if (separator !== -1) {
+          throw new Error(`--${key} does not take a value`);
+        }
         options[normalized] = true;
       } else {
-        if (!next) {
+        if (!next || (separator === -1 && next.startsWith("--"))) {
           throw new Error(`missing value for ${arg}`);
         }
 
         options[normalized] = next;
-        index += 1;
+        if (separator === -1) index += 1;
       }
     } else if (!command) {
       command = arg;
@@ -370,11 +382,17 @@ function parseArgs(args) {
 }
 
 function discoverInstances(registryDir) {
-  if (!fs.existsSync(registryDir)) {
+  let entries;
+  try {
+    entries = fs.readdirSync(registryDir, { withFileTypes: true });
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      console.error(`Cannot read relay registry ${registryDir}: ${error.code || "read failed"}. Check filesystem permissions for this command.`);
+    }
     return [];
   }
 
-  return fs.readdirSync(registryDir, { withFileTypes: true })
+  return entries
     .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
     .map((entry) => path.join(registryDir, entry.name))
     .map((file) => readInstance(file))
@@ -390,7 +408,10 @@ function discoverInstances(registryDir) {
 function readInstance(file) {
   try {
     return JSON.parse(fs.readFileSync(file, "utf8"));
-  } catch {
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      console.error(`Cannot read relay record ${file}: ${error.code || "invalid JSON"}.`);
+    }
     return undefined;
   }
 }
@@ -403,7 +424,14 @@ function isLiveProcess(pid) {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
+  } catch (error) {
+    if (error.code === "EPERM" || error.code === "EACCES") {
+      console.error(`Permission denied checking relay process ${pid}; retaining the instance. Commands still require access to its authenticated localhost endpoint.`);
+      return true;
+    }
+    if (error.code !== "ESRCH") {
+      throw error;
+    }
     return false;
   }
 }
@@ -732,8 +760,10 @@ function registryDirectories(options) {
     return [configured];
   }
 
-  return [DEFAULT_REGISTRY_DIR, LEGACY_REGISTRY_DIR];
+  return [...new Set([DEFAULT_REGISTRY_DIR, TEMP_REGISTRY_DIR, LEGACY_REGISTRY_DIR])];
 }
+
+module.exports = { parseArgs, registryDirectories, discoverInstances };
 
 function numberOption(value, label) {
   if (value === undefined) {

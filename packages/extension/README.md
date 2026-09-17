@@ -21,3 +21,7 @@ Breakpoint management uses VS Code's breakpoint API. Execution and inspection us
 Integrated-terminal commands use VS Code's terminal API. Shell integration supplies streamed command output, exit codes, execution state, and completion waiting. Relay-created terminals are visible and remain ordinary VS Code terminals that agents can write to, interrupt, wait for, or close.
 
 Reload already-open VS Code windows after installing or upgrading the extension.
+
+The extension publishes instance records in `.agent-debug-relay/instances` in your home directory. The CLI uses the same default, including when the agent and VS Code have different temporary directories. Update the CLI alongside the extension.
+
+For a custom registry directory, set `agentDebugRelay.registryDir` in VS Code or launch VS Code with `AGENT_DEBUG_RELAY_REGISTRY_DIR` set to an absolute directory. The VS Code setting takes precedence. Configure the CLI with the same directory. Reload the window after changing the setting; environment overrides must reach the VS Code process, and a `code` launcher can reuse an existing process.

@@ -36,6 +36,8 @@ test("registry flags accept separate and equals values and take precedence", () 
   }
   assert.throws(() => parseArgs(["instances", "--registry-dir", "--json"]), /missing value/);
   assert.throws(() => parseArgs(["instances", "--registry-dir="]), /missing value/);
+  assert.equal(parseArgs(["terminal", "input", "--input", "--help"]).options.input, "--help");
+  assert.equal(parseArgs(["terminal", "run", "--command", "--version"]).options.command, "--version");
 });
 
 test("default discovery survives different temp directories between processes", async (t) => {

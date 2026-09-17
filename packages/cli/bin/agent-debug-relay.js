@@ -364,7 +364,7 @@ function parseArgs(args) {
         }
         options[normalized] = true;
       } else {
-        if (!next || (separator === -1 && next.startsWith("--"))) {
+        if (!next || (key === "registry-dir" && separator === -1 && next.startsWith("--"))) {
           throw new Error(`missing value for ${arg}`);
         }
 
